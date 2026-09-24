@@ -60,12 +60,26 @@ function createReact() {
       const index = cursor
       cursor += 1
       // Effects run once, like a component with an unchanging dependency list.
+      // This stub ignores the dependency array, so an effect that must NOT repeat
+      // on an unchanged render has to say so itself — the panel's open-fetch does
+      // exactly that, and the case below asserts it.
       if (hooks[index] === undefined) {
         hooks[index] = true
         const cleanup = effect()
         return typeof cleanup === 'function' ? cleanup : undefined
       }
       return undefined
+    },
+    /**
+     * A ref hook, kept only because the stub must not lie about the API it
+     * stands in for: an effect that guards itself with a ref would otherwise
+     * behave differently here than in the browser.
+     */
+    useRef(initial) {
+      const index = cursor
+      cursor += 1
+      if (hooks[index] === undefined) hooks[index] = { current: initial }
+      return hooks[index]
     },
     /** Let a test drive a re-render after a `setState` lands. */
     __onRerender(fn) {
@@ -74,6 +88,11 @@ function createReact() {
     /** Reset the hook cursor before each `Panel` invocation. */
     __begin() {
       cursor = 0
+    },
+    /** Read or set the hook cursor, for a test that renders two components. */
+    __cursor(next) {
+      if (typeof next === 'number') cursor = next
+      return cursor
     },
     /**
      * Pre-seed hook slots so a test can mount the panel already holding a value
@@ -191,6 +210,10 @@ async function renderPanel(payload, options = {}) {
   renderPanel.__cardClassOf = entry.component.__cardClassOf
   renderPanel.__stateKeyOf = entry.component.__stateKeyOf
   renderPanel.__PluginCard = entry.component.__PluginCard
+  renderPanel.__update = entry.component.__update
+  // The stub itself, so a test can drive a card's own hooks (see the update
+  // trigger case): a card's state is not reachable from the tree it returns.
+  renderPanel.__react = react
   return tree
 }
 
@@ -463,6 +486,20 @@ function pluginRow(over) {
   }
 }
 
+/**
+ * Props for invoking `PluginCard` directly.
+ *
+ * `face: null` is not a convenience — it is the state the card is in whenever the
+ * host channel is absent, and it is the ONLY face this file may use: the render
+ * test makes no HTTP request, and a card holding a face would ask for refs.
+ *
+ * @param {object} plugin - the inventory row to render.
+ * @returns {object} props for one `PluginCard` call.
+ */
+function cardProps(plugin) {
+  return { plugin, t: (key) => `T:${key}`, face: null }
+}
+
 /** An overview payload with a ready inventory and the given plugins. */
 function withPlugins(plugins) {
   const payload = overview()
@@ -516,86 +553,109 @@ test('panel: a disabled plugin is shown as disabled, with the layer that did it'
 })
 
 /**
- * The card's visible row budget.
+ * The card's visible line budget.
  *
  * This is the assertion that was missing while the card was rebuilt three times.
- * "Too thick" came back as feedback twice, and neither time could a test have
- * caught it: font sizes were asserted, colours were asserted, and the number of
- * VISIBLE ROWS — which is what "too thick" actually means — was not.
+ * "Too thick" came back as feedback THREE times, and none of the first two could
+ * a test have caught: font sizes were asserted, colours were asserted, and the
+ * number of VISIBLE LINES — which is what "too thick" actually means — was not.
  *
- * A collapsed `<details>` does not count: its content is not on screen, which is
- * the whole reason the diagnostics live there.
+ * The count is over the CARD's rows and the grid's own rows, because the card is
+ * a flex column (the grid, then the update panel) and the grid is what declares
+ * the two lines that are always on screen. A third grid row is exactly how the
+ * card got thick the two times it did.
  *
  * @param {object} card - one PluginCard descriptor.
- * @returns {string[]} the classNames of its visible rows.
+ * @returns {string[]} the classNames of its visible lines, top to bottom.
  */
 function visibleRowsOf(card) {
-  const rows = []
+  const lines = []
   for (const child of card.children ?? []) {
     if (child === null || child === undefined || typeof child !== 'object') continue
     const className = child.props && child.props.className
     if (typeof className !== 'string') continue
-    if (className.startsWith('pm-disclosure')) continue
-    rows.push(className)
+    lines.push(className)
+    if (className.startsWith('pm-card-grid')) {
+      for (const inner of child.children ?? []) {
+        if (inner === null || inner === undefined || typeof inner !== 'object') continue
+        lines.push(String(inner.props.className))
+      }
+    }
   }
-  return rows
+  return lines
 }
 
-test('panel: a plugin card renders exactly ONE row of visible content', async () => {
-  // Verified to fail by adding a chips row back — which is the change that made
-  // the card thick in the first place.
+test('panel: a plugin card renders TWO lines — the header grid and the fold', async () => {
+  // Verified to fail twice for real: first when the update trigger got a row of
+  // its own below the fold, then when it sat under the switch and made the
+  // control CLUSTER two lines. Both times the card grew to three.
   await renderPanel(withPlugins([pluginRow({ name: 'one-row' })]), { renders: 1 })
   const PluginCard = renderPanel.__PluginCard
   assert.notEqual(PluginCard, undefined, 'the card component must be reachable for this assertion')
 
-  // The card is INVOKED here: the row count only exists after React would have
+  // The card is INVOKED here: the line count only exists after React would have
   // called it, which is the same reason `cardClassOf` is exposed.
-  const card = PluginCard({ plugin: pluginRow({ name: 'one-row' }), t: (key) => `T:${key}` })
+  const card = PluginCard(cardProps(pluginRow({ name: 'one-row' })))
 
-  const rows = visibleRowsOf(card)
-  assert.equal(
-    rows.length,
-    1,
-    `a card shows one row, found ${rows.length} (${rows.join(' + ')}) — the extra level belongs in the disclosure`,
+  const lines = visibleRowsOf(card)
+  assert.deepEqual(
+    lines,
+    ['pm-card-grid', 'pm-lead', 'pm-card-actions', 'pm-disclosure'],
+    `the card is one grid holding two lines — found ${lines.join(' + ')}`,
   )
-  assert.equal(rows[0], 'pm-row')
 
-  // And the fold is still there, so "one row" was achieved by MOVING the
-  // diagnostics rather than by deleting them.
-  const folded = (card.children ?? []).filter((child) => {
+  // The trigger is on the FOLD's line, which is the whole point: if it were a
+  // third child of the grid, the grid would be three rows tall. The fold's own
+  // diagnostics stay inside the collapsed `<details>`, where they cost nothing.
+  const summaries = findByClass(card, 'pm-fold').filter((node) => String(node.props.className).split(' ').includes('pm-fold'))
+  assert.equal(
+    summaries.length,
+    1,
+    `the fold summary is the card’s second line, found ${summaries.map((n) => n.props.className).join(' + ')}`,
+  )
+  // `Meta` is a COMPONENT descriptor whose rows are props, not children, so the
+  // walk cannot see the `<dl>` it renders (F23 again) — the diagnostics are
+  // asserted by the component being asked for inside the fold.
+  assert.equal(findByClass(card, 'pm-fold').length >= 1, true, 'the fold summary is on the card')
+  const grid = findByClass(card, 'pm-card-grid')[0]
+  assert.ok(
+    findByClass(grid, 'Meta').length >= 1,
+    'the diagnostics are still asked for inside the fold, folded',
+  )
+
+  // And the fold is still a disclosure, so "two lines" was achieved by MOVING
+  // the diagnostics into it rather than by deleting them. It is the grid's own
+  // last row, which is what makes it the card's second line.
+  const folded = (grid.children ?? []).filter((child) => {
     if (child === null || child === undefined || typeof child !== 'object') return false
     return String(child.props === undefined ? '' : child.props.className).startsWith('pm-disclosure')
   })
-  assert.equal(folded.length, 1, 'the diagnostics must still exist, folded')
+  assert.equal(folded.length, 1, 'the fold is the grid’s last row, which is the card’s second line')
 })
 
-test('panel: the switch and its state label share the row, switch first', async () => {
+test('panel: the switch and its state label share the first line, switch first', async () => {
   // The layout contract the list's tidiness rests on: the control and its state
   // are pinned to the right of the SAME row, in that order. When the state sat
   // right after the name it moved with the name's length, and the column of
   // controls looked ragged down the list.
   await renderPanel(withPlugins([pluginRow({ name: 'lead-tool' })]), { renders: 1 })
-  const card = renderPanel.__PluginCard({ plugin: pluginRow({ name: 'lead-tool' }), t: (key) => `T:${key}` })
+  const card = renderPanel.__PluginCard(cardProps(pluginRow({ name: 'lead-tool' })))
 
-  const row = findByClass(card, 'pm-row')[0]
-  assert.notEqual(row, undefined, 'the row must exist')
-
-  const rowClasses = (row.children ?? [])
-    .filter((child) => child !== null && child !== undefined && typeof child === 'object')
-    .map((child) => String(child.props === undefined ? '' : child.props.className))
-
+  const cluster = findByClass(card, 'pm-card-actions')[0]
+  assert.notEqual(cluster, undefined, 'the control cluster must exist')
   assert.deepEqual(
-    rowClasses,
-    ['pm-lead', 'pm-switch pm-switch-on', 'pm-state pm-state-on'],
-    'the row is identity, then the switch, then its state — no extra child to push anything around',
+    (cluster.children ?? []).filter((child) => child !== null && child !== undefined).map((child) => String(child.props.className)),
+    ['pm-switch pm-switch-on', 'pm-state pm-state-on'],
+    'the cluster is the switch and its state, in that order — and nothing else',
   )
-  assert.ok(findByClass(row, 'pm-name').length > 0, 'the name belongs to the identity column')
+  assert.equal(cluster.props.className, 'pm-card-actions', 'the cluster has no open/closed variant to change its height')
 
   // The direct-children check above cannot see a NESTED duplicate, and the first
   // version of this test passed a change that put the status back beside the name
   // — the exact regression it exists to catch. So the status is also asserted to
   // be OUTSIDE the identity column, by structure rather than by count.
-  const lead = findByClass(row, 'pm-lead')[0]
+  const lead = findByClass(card, 'pm-lead')[0]
+  assert.ok(findByClass(lead, 'pm-name').length > 0, 'the name belongs to the identity column')
   assert.equal(
     findByClass(lead, 'pm-state').length,
     0,
@@ -608,6 +668,204 @@ test('panel: the switch and its state label share the row, switch first', async 
   )
 })
 
+test('panel: the update trigger shares the fold line, and goes away once open', async () => {
+  // Three shapes were tried and two were rejected by measurement: a full-width
+  // row below the fold (three lines), and a second line under the switch (three
+  // lines again, because the control cluster grew). The trigger now shares the
+  // fold summary's line, which already existed — so it costs no height at all.
+  await renderPanel(withPlugins([pluginRow({ name: 'upd-tool' })]), { renders: 1 })
+  const PluginCard = renderPanel.__PluginCard
+  const upd = renderPanel.__update
+  assert.notEqual(upd, undefined, 'the update units must be reachable for these assertions')
+
+  const card = PluginCard(cardProps(pluginRow({ name: 'upd-tool' })))
+  const summary = findByClass(card, 'pm-fold')[0]
+  assert.notEqual(summary, undefined, 'the fold summary must exist')
+  assert.equal(String(summary.type), 'summary', 'the trigger rides on the disclosure’s own summary element')
+
+  const kinds = (summary.children ?? []).filter((child) => child !== null && child !== undefined).map((child) => {
+    // A component child is a DESCRIPTOR here, exactly like the cards the panel
+    // asks for: `className` only exists once React invokes it. Asserting on
+    // descriptors instead is how a test reports a bug that is not there (F23).
+    if (child.type === upd.UpdateTrigger) return 'trigger'
+    return String(child.props.className).split(' ')[0]
+  })
+  assert.deepEqual(
+    kinds,
+    ['pm-fold-name', 'trigger'],
+    'the summary is the fold’s name, then the update trigger on the same line',
+  )
+
+  // The trigger is the only thing on this line that is not always drawn, so its
+  // own render is checked by invoking it: the card asks for it, the tree does not
+  // show what it contains. Its label is a CHILD of the descriptor, which is what
+  // the card's own `t` produced.
+  const trigger = summary.children[1]
+  assert.equal(trigger.type, upd.UpdateTrigger, 'the second child of the summary is the update trigger')
+  assert.equal(String((trigger.children ?? [])[0]).trim(), 'T:updateCheck', 'the trigger names what it does')
+  const button = upd.UpdateTrigger(trigger.props)
+  assert.equal(button.props.className, 'pm-btn pm-btn-sm pm-act-btn', 'the trigger is a small card button')
+  assert.equal(button.props.disabled, false, 'a card with no write in flight offers the trigger')
+  assert.equal(typeof button.props.onClick, 'function', 'the trigger must be clickable')
+
+  // And the card with the panel OPEN keeps the same two lines with the trigger
+  // gone — the other half of the same layout claim. The flag is the card's first
+  // hook, and the stub can mount with it already set.
+  const react = renderPanel.__react
+  assert.notEqual(react, undefined, 'the react stub must be reachable to mount an open card')
+  react.__begin()
+  react.__seed([true]) // `updOpen`
+  const openCard = PluginCard(cardProps(pluginRow({ name: 'upd-tool' })))
+  const openSummary = findByClass(openCard, 'pm-fold')[0]
+  assert.deepEqual(
+    (openSummary.children ?? [])
+      .filter((child) => child !== null && child !== undefined)
+      .map((child) => (child.type === upd.UpdateTrigger ? 'trigger' : String(child.props.className).split(' ')[0])),
+    ['pm-fold-name'],
+    'the trigger is gone once the panel is open rather than repeated in two places',
+  )
+  assert.equal(visibleRowsOf(openCard).length, 4, 'and the card is still two lines tall')
+})
+
+test('panel: a missing tool comes with a way to install it, on the host’s terms', async () => {
+  // The user-facing rule: "this cannot be done" must never be the last word when
+  // the machine is the reason. The host reads the platform and sends the exact
+  // command plus the page that documents it; the panel renders a link and a copy
+  // button. The panel does NOT run anything — a plugin that silently runs a
+  // package manager has no consent flow (see src/host/install-hints.mjs).
+  await renderPanel(withPlugins([pluginRow({ name: 'link-tool' })]), { renders: 1 })
+  const upd = renderPanel.__update
+  const t = (key) => `T:${key}`
+
+  const open = {
+    open: true,
+    refs: { phase: 'ready', data: null },
+    remote: { phase: 'idle', data: null, error: null },
+    picked: '',
+    plan: {
+      phase: 'ready',
+      error: null,
+      data: {
+        ok: true,
+        kind: 'checkout',
+        runnable: false,
+        runError: 'git is unavailable',
+        noChangeNeeded: false,
+        warnings: [],
+        tools: { git: { available: false, path: null }, dsh: { available: false, path: null } },
+        installHint: {
+          tool: 'git',
+          platform: 'win32',
+          distro: null,
+          command: 'winget install --id Git.Git -e --source winget',
+          url: 'https://git-scm.com/download/win',
+          note: 'winget ships with Windows 10 1809 and later',
+        },
+      },
+    },
+    run: { phase: 'idle', data: null, error: null },
+    canRemote: false,
+    setPicked: () => undefined,
+    loadRefs: () => undefined,
+    askRemote: () => undefined,
+    apply: () => undefined,
+    copyText: () => undefined,
+  }
+
+  const tree = upd.UpdatePanel({ ...open, t })
+  assert.notEqual(tree, null, 'an open panel renders')
+
+  const block = findByClass(tree, 'pm-upd-fix')[0]
+  assert.notEqual(block, undefined, 'a missing tool gets its own block, not one more note')
+
+  // The command the user would paste, verbatim.
+  assert.ok(
+    JSON.stringify(block).includes('winget install --id Git.Git'),
+    'the platform’s own command must be on screen, not merely described',
+  )
+
+  // A link that opens the page, in a new tab, without handing it this document.
+  const link = findByClass(block, 'pm-btn').find((node) => node.type === 'a')
+  assert.notEqual(link, undefined, 'the install page must be reachable by a click')
+  assert.equal(link.props.href, 'https://git-scm.com/download/win', 'the host decides WHERE, so the platform is the host’s answer')
+  assert.equal(link.props.target, '_blank')
+  assert.equal(link.props.rel, 'noreferrer noopener')
+
+  // And the boundary is stated: this button does not install anything.
+  assert.ok(JSON.stringify(block).includes('T:updateInstallManual'), 'the panel must say it will not install for the user')
+
+  // A plan that CAN run carries no install block at all: a hint there is noise.
+  const runnable = upd.UpdatePanel({
+    ...open,
+    t,
+    plan: { phase: 'ready', error: null, data: { ...open.plan.data, runnable: true, tools: { git: { available: true }, dsh: null }, installHint: null } },
+  })
+  assert.equal(findByClass(runnable, 'pm-upd-fix').length, 0, 'no hint when nothing is missing')
+})
+
+test('panel: pressing the update trigger opens the panel and reads this checkout', async () => {
+  // The click is driven through `useUpdate` on a stub of its own. A hook's state
+  // lives in the stub's slots, so driving the whole card would mean reasoning
+  // about slot offsets for every render; the hook is the unit that owns the click
+  // response, and the card's own render of it is asserted above.
+  const { exports, react } = loadBundle()
+  let Panel = null
+  exports.apply({
+    effect: (callback) => {
+      callback()
+      return () => {}
+    },
+    slots: {
+      inject: (key, callback) => callback(),
+      register: (options, component) => {
+        Panel = component
+        return () => {}
+      },
+    },
+    locale: { register: () => () => {}, bind: () => (key) => `T:${key}` },
+    get: () => undefined,
+  })
+  assert.notEqual(Panel, null, 'the tab must register')
+  const upd = Panel.__update
+
+  const calls = []
+  const face = {
+    refs: (name) => {
+      calls.push(name)
+      return Promise.resolve({ ok: true, local: { head: { attached: false, commit: 'abcdef0123456789' }, versionTags: [], branches: [] } })
+    },
+  }
+  const t = (key) => `T:${key}`
+
+  // Every render starts from the same cursor, the way one component's renders
+  // share one hook list: the stub holds one slot list per instance, so a second
+  // call without the reset would read whatever slot it happened to be on.
+  let opened = false
+  const control = () => {
+    react.__begin()
+    return upd.useUpdate(pluginRow({ name: 'upd-tool' }), face, t, opened, (next) => (opened = next))
+  }
+  const closed = control()
+  assert.equal(closed.open, false, 'a mounted card starts closed')
+  assert.deepEqual(calls, [], 'a closed card must not read refs — the list is scanned far more often than it is updated')
+  assert.equal(upd.UpdatePanel({ ...closed, t }), null, 'a closed panel renders nothing')
+
+  closed.openPanel()
+  assert.equal(opened, true, 'the trigger opens the panel')
+  assert.deepEqual(calls, ['upd-tool'], 'opening reads the refs of the plugin the card belongs to')
+  const openedState = control()
+  assert.equal(openedState.open, true, 'and the panel renders from that state')
+  assert.equal(openedState.refs.phase, 'loading', 'the panel says it is reading rather than showing an empty list')
+  assert.notEqual(upd.UpdatePanel({ ...openedState, t }), null, 'an open panel renders')
+
+  // Opening once is not opening twice: a re-render of the open panel must not
+  // start another request. The panel's own 載入版本 is the way to ask again, and
+  // it calls `loadRefs` directly.
+  const again = control()
+  assert.deepEqual(calls, ['upd-tool'], 'the open panel does not re-read the refs on every render')
+  assert.equal(again.open, true, 'and it stays open')
+})
+
 test('panel: the switch reports its state to assistive tech', async () => {
   // A switch has to be a switch, not a styled div: role plus aria-checked is what
   // makes "on" audible rather than merely visible.
@@ -615,13 +873,13 @@ test('panel: the switch reports its state to assistive tech', async () => {
   const PluginCard = renderPanel.__PluginCard
   const t = (key) => `T:${key}`
 
-  const on = findByClass(PluginCard({ plugin: pluginRow({ enabled: true, enabledState: 'running' }), t }), 'pm-switch')[0]
+  const on = findByClass(PluginCard(cardProps(pluginRow({ enabled: true, enabledState: 'running' }))), 'pm-switch')[0]
   assert.equal(on.props.role, 'switch')
   assert.equal(on.props['aria-checked'], 'true')
   assert.match(String(on.props['aria-label']), /T:stateRunning/)
 
   const off = findByClass(
-    PluginCard({ plugin: pluginRow({ name: 'off', enabled: false, enabledState: 'disabled', loaded: false }), t }),
+    PluginCard(cardProps(pluginRow({ name: 'off', enabled: false, enabledState: 'disabled', loaded: false }))),
     'pm-switch',
   )[0]
   assert.equal(off.props['aria-checked'], 'false')
@@ -645,7 +903,7 @@ test('panel: EVERY plugin shows its package.json version, from any source', asyn
   ]
 
   for (const over of cases) {
-    const card = PluginCard({ plugin: pluginRow(over), t })
+    const card = PluginCard(cardProps(pluginRow(over)))
     const chips = findByClass(card, 'pm-ver')
     assert.equal(chips.length, 1, `${over.name} must show exactly one version chip`)
     assert.equal(chips[0].children[0], `v${over.version}`, `${over.name} must show its package.json version`)
@@ -671,7 +929,7 @@ test('panel: the disabled layer is folded, not deleted', async () => {
     enabledState: 'disabled',
     disabledBy: 'user patch (cordis.patch.yml)',
   })
-  const card = renderPanel.__PluginCard({ plugin, t: (key) => `T:${key}` })
+  const card = renderPanel.__PluginCard(cardProps(plugin))
   const fold = findByClass(card, 'pm-disclosure')[0]
 
   assert.notEqual(fold, undefined, 'the folded diagnostics must exist')
@@ -715,6 +973,11 @@ function findByClass(node, token, found = []) {
   }
   const className = node.props && node.props.className
   if (typeof className === 'string' && className.includes(token)) found.push(node)
+  // A COMPONENT child is a descriptor too, and its own render is never walked
+  // (see F23). Its `type` is the only name it has in the tree, so a component can
+  // be looked up by the name it was asked for with — which is how a nested
+  // component like `Meta` is asserted to still be on the card.
+  if (typeof node.type === 'function' && node.type.name === token) found.push(node)
   if (Array.isArray(node.children)) {
     for (const child of node.children) findByClass(child, token, found)
   }

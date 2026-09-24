@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { readdirSync, statSync } from 'node:fs'
 
 import { createRealSubprocess } from './helpers/real-subprocess.mjs'
+import { linuxInstallCommand, toolInstallHint } from '../src/host/install-hints.mjs'
 import {
   base64,
   describeProbe,
@@ -248,4 +249,61 @@ test('host: a probe failure is remembered as an answer, not re-tested per call',
   const second = await probeGit(subprocess, realFs())
   assert.equal(first.available, second.available)
   assert.equal(typeof first.error === 'string', typeof second.error === 'string')
+})
+
+test('host: the install hint is per platform, and never invents a command', () => {
+  // The rule from the user's side: a refusal caused by the MACHINE has to come
+  // with a way out, on every system this runs on. Each platform gets its own
+  // package manager — and a platform nobody here has tested gets the official
+  // page rather than a guessed command.
+  const win = toolInstallHint('git', { platform: 'win32' })
+  assert.equal(win.command, 'winget install --id Git.Git -e --source winget')
+  assert.equal(win.url, 'https://git-scm.com/download/win')
+  assert.equal(win.distro, null)
+
+  const mac = toolInstallHint('git', { platform: 'darwin' })
+  assert.equal(mac.command, 'xcode-select --install', 'macOS ships git with the command line tools')
+  assert.equal(mac.url, 'https://git-scm.com/download/mac')
+
+  // Linux is answered from the distro, because "install git" is a different
+  // command on Debian and on Arch.
+  const ubuntu = toolInstallHint('git', { platform: 'linux', osRelease: 'ID=ubuntu\nID_LIKE=debian\n' })
+  assert.equal(ubuntu.command, 'sudo apt-get update && sudo apt-get install -y git')
+  assert.equal(ubuntu.distro, 'ubuntu')
+
+  const arch = toolInstallHint('git', { platform: 'linux', osRelease: 'ID=arch\n' })
+  assert.equal(arch.command, 'sudo pacman -S --noconfirm git')
+
+  // An unreadable /etc/os-release must NOT become a wrong command.
+  const unknown = toolInstallHint('git', { platform: 'linux', osRelease: null })
+  assert.equal(unknown.command, null, 'no command is the honest answer when the distribution is unknown')
+  assert.match(String(unknown.url), /^https:\/\/git-scm\.com\//, 'but the official instructions are still offered')
+
+  // A platform this file has never seen: still a link, still no invented command.
+  const plan9 = toolInstallHint('git', { platform: 'plan9' })
+  assert.equal(plan9.command, null)
+  assert.equal(plan9.url, 'https://git-scm.com/downloads')
+  assert.equal(plan9.platform, 'plan9')
+
+  // And an unknown TOOL is refused rather than half-answered.
+  assert.equal(toolInstallHint('svn', { platform: 'win32' }), null)
+  assert.equal(toolInstallHint('git', { platform: null }), null)
+})
+
+test('host: the linux hint reads ID_LIKE, so derivatives are not left without a command', () => {
+  // The trap this exists for: Linux Mint reports `ID=linuxmint`, and only
+  // `ID_LIKE` says that apt is the answer. Reading `ID` alone would drop every
+  // derivative through to the source-build page.
+  const mint = toolInstallHint('git', { platform: 'linux', osRelease: 'NAME="Linux Mint"\nID=linuxmint\nID_LIKE="ubuntu debian"\n' })
+  assert.equal(mint.command, 'sudo apt-get update && sudo apt-get install -y git')
+  // The distro's OWN id is reported, not the family it resembles: this is the
+  // value of `ID`, and the family only decided which command applies.
+  assert.equal(mint.distro, 'linuxmint')
+
+  // Quoted values, comments and blank lines are all in the real file.
+  const rocky = toolInstallHint('git', { platform: 'linux', osRelease: '# comment\nID="rocky"\nVERSION="9.4"\n\n' })
+  assert.equal(rocky.command, 'sudo dnf install -y git')
+
+  assert.equal(linuxInstallCommand(''), null)
+  assert.equal(linuxInstallCommand('ID=freedesktop\n'), null, 'a distro with no known family gets no command')
 })

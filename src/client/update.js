@@ -22,6 +22,13 @@
  * always shows a version dropdown, three buttons and a command line is a card
  * nobody can scan — so the trigger is one small button, and everything else
  * appears only when it is asked for.
+ *
+ * ## Where the trigger lives
+ *
+ * That one button sits on the fold's own line, at the right end of the summary
+ * (`pm-fold`, see panel.js) — the card's second line, which already exists. Two
+ * other homes were tried and both grew the card to three lines: a full-width row
+ * of its own below the fold, and a second line under the switch.
  */
 
 /**
@@ -107,15 +114,29 @@ export function createUpdatePanel(react) {
     )
   }
 
-  /** The update control for one plugin card. */
-  function UpdatePanel(props) {
-    const t = props.t
-    const plugin = props.plugin
-    const face = props.face
-
+  /**
+   * The update half's state and its I/O, for ONE plugin.
+   *
+   * It is a hook rather than a component because the SAME state has to drive two
+   * places on the card: the trigger sits in the card's control cluster (under the
+   * switch) while the panel it opens sits at the bottom of the fold. Two
+   * components would be two copies of this state, and the row button would open
+   * nothing.
+   *
+   * The card calls it; the panel below renders from what it returns and owns no
+   * state itself.
+   *
+   * @param {object} plugin - the inventory row this controller belongs to.
+   * @param {object|null} face - the host face, or null when there is none.
+   * @param {(key: string) => string} t - copy lookup.
+   * @param {boolean} open - whether the card has the panel open. The card owns
+   *   this one flag, because the card is what draws the trigger.
+   * @param {(next: boolean) => void} setOpen - open or close it.
+   * @returns {object} the state, the handlers, and `open` back for the panel.
+   */
+  function useUpdate(plugin, face, t, open, setOpen) {
     // Hook order is part of the contract with the render test's stub: read them
     // in a fixed order, never conditionally.
-    const [open, setOpen] = useState(false)
     const [refs, setRefs] = useState({ phase: 'idle', data: null, error: null })
     const [remote, setRemote] = useState({ phase: 'idle', data: null, error: null })
     const [picked, setPicked] = useState('')
@@ -127,10 +148,10 @@ export function createUpdatePanel(react) {
     const canPlan = face !== null && face !== undefined && typeof face.plan === 'function'
     const canApply = face !== null && face !== undefined && typeof face.apply === 'function'
 
-    // Loading refs is what OPENS the panel, so it is also what makes the first
-    // claim: not "there is an update" but "here is what this checkout knows".
+    // The fetch itself: no state of its own beyond the results, so it can be
+    // called from the trigger, from the panel's own reload button, and from a
+    // retry, without any of them repeating another's claim.
     function loadRefs() {
-      setOpen(true)
       if (!canAsk) {
         setRefs({ phase: 'error', data: null, error: t('noHost') })
         return
@@ -147,6 +168,16 @@ export function createUpdatePanel(react) {
           setPicked((current) => (current.length > 0 ? current : first === null ? '' : first.value))
         })
         .catch((error) => setRefs({ phase: 'error', data: null, error: error && error.message ? error.message : String(error) }))
+    }
+
+    // The trigger does BOTH things in one click: opening the panel is what puts
+    // the ref list on screen, so opening without reading would show an empty box.
+    // It is deliberately a handler rather than an effect on `open` — an effect
+    // has to decide whether this open is a new one, and "did I already fetch" is
+    // state the click already knows the answer to.
+    function openPanel() {
+      setOpen(true)
+      loadRefs()
     }
 
     function askRemote() {
@@ -204,6 +235,70 @@ export function createUpdatePanel(react) {
         .catch((error) => setRun({ phase: 'error', data: null, error: error && error.message ? error.message : String(error) }))
     }
 
+    return {
+      open,
+      refs,
+      remote,
+      picked,
+      plan,
+      run,
+      // Which host calls exist at all. The panel draws buttons for them, so the
+      // answers travel with the state rather than being recomputed there.
+      canRemote,
+      setPicked,
+      loadRefs,
+      openPanel,
+      askRemote,
+      apply,
+    }
+  }
+
+  /**
+   * The one button a closed update panel is allowed to cost the card.
+   *
+   * It is a component rather than a bare `h('button', …)` in panel.js so that the
+   * button's size, label and disabled reason stay in this file, next to the panel
+   * it opens and the copy it uses. Its home is the fold summary's right end, and
+   * the summary's flex row is what puts it there.
+   *
+   * @param {object} props - `t`, `plugin`, `busy`, `canAsk`, `onOpen`, children.
+   * @returns {object} the button.
+   */
+  function UpdateTrigger(props) {
+    return h(
+      'button',
+      {
+        type: 'button',
+        className: 'pm-btn pm-btn-sm pm-act-btn',
+        // The card owns "busy": while a toggle write is in flight, a second write
+        // path must not be startable from the same row.
+        disabled: props.busy === true,
+        // `noHost` is only reachable through this channel, so the failure reason
+        // belongs on the control rather than in a note that never gets drawn.
+        title: props.canAsk === true ? null : props.t('noHost'),
+        onClick: props.onOpen,
+      },
+      props.children,
+    )
+  }
+
+  /**
+   * The update panel itself — pure presentation.
+   *
+   * Everything it shows comes from `useUpdate` through props, because the trigger
+   * lives in another part of the card. It renders nothing until that trigger has
+   * opened it.
+   *
+   * @param {object} props - the `useUpdate` result, plus `t`, `plugin` and `busy`.
+   * @returns {object|null} the panel, or null while it is closed.
+   */
+  function UpdatePanel(props) {
+    const t = props.t
+    const plugin = props.plugin
+    const { refs, remote, picked, plan, run, canRemote, setPicked, loadRefs, askRemote, apply, copyText } = props
+
+    if (props.open !== true) return null
+
     const groups = refs.phase === 'ready' ? groupRefs(refs.data, remote.phase === 'ready' ? remote.data : null) : []
     // Named, not implied: the newest tag is preselected, and a preselection
     // nobody explained is a choice the user has to audit before trusting it.
@@ -232,14 +327,6 @@ export function createUpdatePanel(react) {
 
     const planData = plan.phase === 'ready' ? plan.data : null
     const runnable = planData !== null && planData.ok === true && planData.runnable === true && planData.noChangeNeeded !== true
-
-    if (!open) {
-      return h(
-        'button',
-        { type: 'button', className: 'pm-btn pm-btn-sm', disabled: props.busy === true, onClick: loadRefs },
-        props.busy === true ? t('working') : t('updateCheck'),
-      )
-    }
 
     return h(
       'div',
@@ -357,8 +444,62 @@ export function createUpdatePanel(react) {
               : null,
             // A refusal that has a way out names it. "Not possible" with no
             // alternative is the answer that makes a panel useless.
+            //
+            // When the way out is "install the tool", the panel does not stop at
+            // naming it: the host sends the platform's own command and its
+            // download page (`installHint`), and this renders them as something
+            // the user can act on — a link, and the exact text to copy. The panel
+            // never installs anything itself: it is a plugin, and running a
+            // package manager needs a consent flow it does not have.
             planData.kind === 'checkout' && planData.tools && planData.tools.git && planData.tools.git.available !== true
-              ? h('div', { className: 'pm-upd-note' }, `${t('updateRequiresGit')} ${t('updateCloneHint')}`)
+              ? h(
+                  'div',
+                  { className: 'pm-upd-fix' },
+                  h('div', { className: 'pm-upd-note' }, `${t('updateRequiresGit')} ${t('updateCloneHint')}`),
+                  planData.installHint === null || planData.installHint === undefined
+                    ? null
+                    : h(
+                        'div',
+                        { className: 'pm-upd-fix-body' },
+                        h('div', { className: 'pm-upd-fix-title' }, `${t('updateInstallTitle')} ${String(planData.installHint.tool)}`),
+                        planData.installHint.command === null || planData.installHint.command === undefined
+                          ? null
+                          : h(
+                              'div',
+                              { className: 'pm-upd-fix-cmd' },
+                              h('code', { className: 'pm-mono pm-break' }, String(planData.installHint.command)),
+                              h(
+                                'button',
+                                {
+                                  type: 'button',
+                                  className: 'pm-btn pm-btn-sm',
+                                  // The copy is done by `copyText`, and this button is
+                                  // only drawn when it exists.
+                                  onClick: () => copyText(String(planData.installHint.command)),
+                                },
+                                t('updateCopy'),
+                              ),
+                            ),
+                        planData.installHint.note === null || planData.installHint.note === undefined
+                          ? null
+                          : h('div', { className: 'pm-upd-note' }, String(planData.installHint.note)),
+                        h(
+                          'div',
+                          { className: 'pm-upd-actions' },
+                          h(
+                            'a',
+                            {
+                              className: 'pm-btn pm-btn-sm',
+                              href: String(planData.installHint.url),
+                              target: '_blank',
+                              rel: 'noreferrer noopener',
+                            },
+                            `${t('updateInstallOpen')} →`,
+                          ),
+                          h('span', { className: 'pm-upd-note' }, t('updateInstallManual')),
+                        ),
+                      ),
+                )
               : null,
             Array.isArray(planData.warnings) && planData.warnings.length > 0
               ? h('div', { className: 'pm-upd-note' }, planData.warnings.join(' '))
@@ -400,5 +541,6 @@ export function createUpdatePanel(react) {
 
   UpdatePanel.__groupRefs = groupRefs
 
-  return { UpdatePanel, groupRefs }
+  return { UpdatePanel, UpdateTrigger, groupRefs, useUpdate }
 }
+

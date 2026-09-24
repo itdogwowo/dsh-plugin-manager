@@ -122,6 +122,10 @@ export const zh = {
   updateUrlNote: 'URL／tag 來源的 spec 永遠不變、內容會變，這裡做的是重新抓取。',
   updateRequiresGit: '移動本地 checkout 需要 git 執行檔，這台機器上找不到。',
   updateCloneHint: '替代做法：把來源改成 github:<owner>/<repo>#<ref>，再由官方 CLI 安裝。',
+  updateInstallTitle: '安裝',
+  updateCopy: '複製指令',
+  updateInstallOpen: '開安裝說明',
+  updateInstallManual: '面板不會替你安裝：這行指令要你自己貼進終端機，看過再跑。',
 
   at: '讀取時間',
   profile: 'profile',
@@ -264,6 +268,10 @@ export const en = {
   updateUrlNote: 'A URL or tag spec keeps its name while its content changes, so this refetches it.',
   updateRequiresGit: 'Moving a local checkout needs the git executable, and it is not on this machine.',
   updateCloneHint: 'Alternative: point the source at github:<owner>/<repo>#<ref> and let the official CLI install it.',
+  updateInstallTitle: 'Install',
+  updateCopy: 'Copy command',
+  updateInstallOpen: 'How to install',
+  updateInstallManual: 'This panel will not install it for you: paste the command into a terminal and read it before running it.',
 
   at: 'read at',
   profile: 'profile',

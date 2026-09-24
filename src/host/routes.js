@@ -38,6 +38,7 @@ import { setEnabled } from './patch-writer.js'
 import { probeDshLauncher, probeGit } from './host.js'
 import { readLocalRefs, parseRemoteUrl } from './gitrefs.js'
 import { fetchRemoteRefs } from './gitremote.js'
+import { toolInstallHint } from './install-hints.mjs'
 import { classifyUpdate, materialiseArgv, planUpdate, pluginCommand, rollbackLast, runPipeline } from './pipeline.js'
 
 /** Path prefix; must equal `prefix` in `src/endpoints.json`. */
@@ -405,6 +406,25 @@ function remoteRefsHandler(get) {
 }
 
 /**
+ * The text of `/etc/os-release`, or null.
+ *
+ * Read through the host's `fs` service rather than `node:fs`, and read only when
+ * a Linux platform is about to need it: on Windows and macOS this file does not
+ * exist, so the caller must not pay a failed stat for every plan.
+ *
+ * @param {object} fs - the resolved `fs` service.
+ * @returns {Promise<string|null>} the file's text, or null when unreadable.
+ */
+async function readOsRelease(fs) {
+  if (fs === undefined || fs === null || typeof fs.resolve !== 'function' || typeof fs.readText !== 'function') return null
+  try {
+    return await fs.readText(await fs.resolve('/etc/os-release'))
+  } catch {
+    return null
+  }
+}
+
+/**
  * `plan` — what an update would do, without doing it.
  *
  * This is the shape the whole package is built around: the answer arrives
@@ -449,12 +469,23 @@ function planHandler(get) {
       })
 
       const materialised = materialiseArgv({ git: probes.git, launcher: probes.launcher }, plan.argv)
+      // Only when a MISSING tool is what stands in the way: a hint on a plan
+      // that can already run is noise, and one shown for "git refused this
+      // command" would suggest installing what is already installed.
+      const gitMissing = probes.git !== null && probes.git.available !== true && (classified.needs ?? []).includes('git')
+      const installHint = gitMissing
+        ? toolInstallHint('git', {
+            platform: typeof process !== 'undefined' ? process.platform : null,
+            osRelease: typeof process !== 'undefined' && process.platform === 'linux' ? await readOsRelease(context.fs) : null,
+          })
+        : null
       sendJson(res, 200, {
         ...plan,
         runnable: materialised.ok === true,
         runError: materialised.ok === true ? null : materialised.error,
         displayArgv: plan.argv,
         needs: classified.needs ?? [],
+        installHint,
         tools: {
           // `null` means "not probed", which is different from "not available"
           // and must not be rendered as the same thing.

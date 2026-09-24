@@ -161,7 +161,7 @@ test('hierarchy: no TEXT is set below 11px', () => {
   )
 })
 
-test('hierarchy: the card row pins the control with a grid column, not a fixed width', () => {
+test('hierarchy: the card grid pins the control with a grid column, not a fixed width', () => {
   // The raggedness came from the status sitting right after the name, so its
   // position moved with the name's length. The fix is a grid column, which
   // aligns without a magic number — and a fixed `width` would break the moment a
@@ -171,15 +171,25 @@ test('hierarchy: the card row pins the control with a grid column, not a fixed w
   // in this rule, so the boundary is required.
   const fixedWidth = /(?:^|;)\s*width:\s*\d/
 
-  const row = CSS.match(/\.pm-row\{([^}]*)\}/)
-  assert.notEqual(row, null, '.pm-row must declare its layout')
-  assert.match(row[1], /display:grid/, 'the row must be a grid so the control column is stable')
+  const grid = CSS.match(/\.pm-card-grid\{([^}]*)\}/)
+  assert.notEqual(grid, null, '.pm-card-grid must declare its layout')
+  assert.match(grid[1], /display:grid/, 'the card must be a grid so the control column is stable')
   assert.match(
-    row[1],
+    grid[1],
     /grid-template-columns:minmax\(0,1fr\) auto auto/,
     'identity is the flexible column; the switch and its label are sized to content',
   )
-  assert.equal(fixedWidth.test(row[1]), false, 'the row must not pin a fixed width')
+  assert.equal(fixedWidth.test(grid[1]), false, 'the grid must not pin a fixed width')
+
+  // The fold is a row OF that grid, not a sibling block after it: that is what
+  // lets the update trigger share the summary's line instead of adding a third
+  // row. Both failed attempts (a full-width row of its own, then a second line
+  // under the switch) grew the card to three lines.
+  assert.match(
+    CSS,
+    /\.pm-card-grid>\.pm-disclosure\{[^}]*grid-column:1\/-1/,
+    'the fold must span the grid’s row, or the trigger cannot share its line',
+  )
 
   // And the state label must not be given a fixed width either: it is the thing
   // whose length differs between locales.

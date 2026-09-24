@@ -145,6 +145,10 @@ window.__ModuleLoader__.load({
         updateUrlNote: 'URL／tag 來源的 spec 永遠不變、內容會變，這裡做的是重新抓取。',
         updateRequiresGit: '移動本地 checkout 需要 git 執行檔，這台機器上找不到。',
         updateCloneHint: '替代做法：把來源改成 github:<owner>/<repo>#<ref>，再由官方 CLI 安裝。',
+        updateInstallTitle: '安裝',
+        updateCopy: '複製指令',
+        updateInstallOpen: '開安裝說明',
+        updateInstallManual: '面板不會替你安裝：這行指令要你自己貼進終端機，看過再跑。',
       
         at: '讀取時間',
         profile: 'profile',
@@ -287,6 +291,10 @@ window.__ModuleLoader__.load({
         updateUrlNote: 'A URL or tag spec keeps its name while its content changes, so this refetches it.',
         updateRequiresGit: 'Moving a local checkout needs the git executable, and it is not on this machine.',
         updateCloneHint: 'Alternative: point the source at github:<owner>/<repo>#<ref> and let the official CLI install it.',
+        updateInstallTitle: 'Install',
+        updateCopy: 'Copy command',
+        updateInstallOpen: 'How to install',
+        updateInstallManual: 'This panel will not install it for you: paste the command into a terminal and read it before running it.',
       
         at: 'read at',
         profile: 'profile',
@@ -441,7 +449,24 @@ window.__ModuleLoader__.load({
          not participating, and that has to be visible before the text is read. */
       .pm-card-off{background:var(--dsw-alias-bg-layer-2,#f6f8fa)}
       .pm-card-off .pm-name{color:var(--dsw-alias-label-secondary,#656d76)}
-      .pm-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px;min-width:0}
+      /* The card grid. TWO rows, and they are the whole card:
+       *
+       *   1  identity (1fr)              · the switch and its state (pinned right)
+       *   2  the fold's summary (1fr)    · the update trigger (pinned right)
+       *
+       * Declaring both rows HERE, rather than letting the fold be a sibling block, is
+       * what keeps the card two lines tall. The trigger's home was the open question:
+       * a full-width row of its own made the card three lines, and putting it under
+       * the switch made the CONTROL column two lines, which is also three. On the
+       * summary's line it costs nothing — that line already exists — and the shared
+       * grid column keeps its right edge on the state label's.
+       *
+       * No fixed width anywhere: the state's position used to follow the name's
+       * length, which is what made the list look ragged. */
+      .pm-card-grid{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:1px 8px;min-width:0}
+      /* The fold spans both columns so its summary text starts at the card's left
+         edge and the trigger can be pushed to the right end of the same line. */
+      .pm-card-grid>.pm-disclosure{grid-column:1/-1;min-width:0}
       /* Identity takes the free column. min-width:0 is what lets a long name shrink
          and wrap instead of pushing the control out of alignment. */
       .pm-lead{display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-width:0}
@@ -472,6 +497,14 @@ window.__ModuleLoader__.load({
       .pm-state-on{color:var(--dsw-alias-state-success-primary,#1a7f37)}
       .pm-state-off{color:var(--dsw-alias-state-warn-primary,#9a6700)}
       
+      /* The control cluster: the switch, then the state in words, on the card's first
+         line. It is the grid's own columns 2-3, so nothing here is positioned by a
+         magic number. */
+      .pm-card-actions{grid-row:1;grid-column:2/span 2;display:flex;align-items:center;gap:8px;min-width:0}
+      /* The card's own action button: the same button as any other, sized to the line
+         it shares with an 11px summary. */
+      .pm-act-btn{flex:none}
+      
       /* ── chips: L4 ──────────────────────────────────────────────────────────── */
       .pm-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
       .pm-chip{display:inline-flex;align-items:center;border-radius:999px;padding:3px 9px;font-size:12px;line-height:1.45;border:1px solid var(--dsw-alias-border-l2,#d0d7de);color:var(--dsw-alias-label-secondary,#656d76);white-space:nowrap}
@@ -480,12 +513,20 @@ window.__ModuleLoader__.load({
       .pm-chip-self{color:var(--dsw-alias-brand-primary,#0969da);border-color:var(--dsw-alias-brand-primary,#0969da)}
       
       /* ── L5/L6 disclosures: diagnostics live down here, out of the way ──────── */
-      .pm-disclosure{margin-top:1px}
-      .pm-disclosure>summary{cursor:pointer;font-size:11px;color:var(--dsw-alias-label-secondary,#656d76);list-style:none;padding:1px 0;display:inline-flex;align-items:center;gap:5px}
+      .pm-disclosure{margin-top:0}
+      /* The summary is the card's second line, and it is a FLEX row rather than an
+         inline summary: the fold's name sits at the left edge and the update trigger
+         is pushed to the right end, on the same line. A summary element is a flex
+         container like any other box — the disclosure behaviour is in the element, not
+         in the display. */
+      .pm-disclosure>summary.pm-fold{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;color:var(--dsw-alias-label-secondary,#656d76);list-style:none;padding:1px 0}
+      .pm-fold-name{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
       .pm-disclosure>summary::-webkit-details-marker{display:none}
-      .pm-disclosure>summary::before{content:'▸';font-size:9px;display:inline-block;width:8px}
+      .pm-disclosure>summary::before{content:'▸';font-size:9px;display:inline-block;width:8px;flex:none}
       .pm-disclosure[open]>summary::before{content:'▾'}
-      .pm-disclosure>summary:hover{color:var(--dsw-alias-brand-primary,#0969da)}
+      /* The colour change is the FOLD's affordance, so it must not also fire when the
+         pointer is over the update trigger sharing this line. */
+      .pm-disclosure>summary:hover .pm-fold-name{color:var(--dsw-alias-brand-primary,#0969da)}
       .pm-meta{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:5px 0 0;font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
       .pm-meta dt{white-space:nowrap}
       .pm-meta dd{margin:0;overflow-wrap:anywhere}
@@ -546,6 +587,21 @@ window.__ModuleLoader__.load({
       .pm-upd-step{color:var(--dsw-alias-state-success-primary,#1a7f37)}
       .pm-upd-step-bad{color:var(--dsw-alias-state-error-primary,#cf222e)}
       .pm-upd-step .pm-upd-note{margin-left:6px}
+      
+      /* The way out of a refusal. It is the ONE place the update panel offers
+         something to DO about a missing tool, so it is set apart from the notes
+         around it rather than looking like one more line of explanation. */
+      .pm-upd-fix{display:flex;flex-direction:column;gap:5px;border-left:3px solid var(--dsw-alias-state-warn-primary,#9a6700);background:var(--dsw-alias-bg-layer-1,#f6f8fa);border-radius:0 8px 8px 0;padding:7px 10px}
+      .pm-upd-fix-body{display:flex;flex-direction:column;gap:5px}
+      .pm-upd-fix-title{font-weight:600}
+      /* The command is the point of the block: monospace, selectable, and on its own
+         line so a long one wraps instead of pushing the copy button off the panel. */
+      .pm-upd-fix-cmd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 7px;border:1px solid var(--dsw-alias-border-l1,#d8dee4);border-radius:6px;background:var(--dsw-alias-bg-base,#ffffff)}
+      .pm-upd-fix-cmd code{flex:1 1 auto;min-width:0;font-size:11px;user-select:all}
+      .pm-upd-fix .pm-upd-actions{align-items:center}
+      /* An anchor styled as a button keeps its underline off: it is a control here,
+         not a link inside a sentence. */
+      a.pm-btn{display:inline-flex;align-items:center;text-decoration:none}
       
       /* Hover borders and the switch knob: both are motion, both stop when asked. */
       @media (prefers-reduced-motion: reduce){.pm-card,.pm-btn,.pm-switch,.pm-switch-knob{transition:none}}
@@ -806,6 +862,13 @@ window.__ModuleLoader__.load({
        * always shows a version dropdown, three buttons and a command line is a card
        * nobody can scan — so the trigger is one small button, and everything else
        * appears only when it is asked for.
+       *
+       * ## Where the trigger lives
+       *
+       * That one button sits on the fold's own line, at the right end of the summary
+       * (`pm-fold`, see panel.js) — the card's second line, which already exists. Two
+       * other homes were tried and both grew the card to three lines: a full-width row
+       * of its own below the fold, and a second line under the switch.
        */
       
       /**
@@ -891,15 +954,29 @@ window.__ModuleLoader__.load({
           )
         }
       
-        /** The update control for one plugin card. */
-        function UpdatePanel(props) {
-          const t = props.t
-          const plugin = props.plugin
-          const face = props.face
-      
+        /**
+         * The update half's state and its I/O, for ONE plugin.
+         *
+         * It is a hook rather than a component because the SAME state has to drive two
+         * places on the card: the trigger sits in the card's control cluster (under the
+         * switch) while the panel it opens sits at the bottom of the fold. Two
+         * components would be two copies of this state, and the row button would open
+         * nothing.
+         *
+         * The card calls it; the panel below renders from what it returns and owns no
+         * state itself.
+         *
+         * @param {object} plugin - the inventory row this controller belongs to.
+         * @param {object|null} face - the host face, or null when there is none.
+         * @param {(key: string) => string} t - copy lookup.
+         * @param {boolean} open - whether the card has the panel open. The card owns
+         *   this one flag, because the card is what draws the trigger.
+         * @param {(next: boolean) => void} setOpen - open or close it.
+         * @returns {object} the state, the handlers, and `open` back for the panel.
+         */
+        function useUpdate(plugin, face, t, open, setOpen) {
           // Hook order is part of the contract with the render test's stub: read them
           // in a fixed order, never conditionally.
-          const [open, setOpen] = useState(false)
           const [refs, setRefs] = useState({ phase: 'idle', data: null, error: null })
           const [remote, setRemote] = useState({ phase: 'idle', data: null, error: null })
           const [picked, setPicked] = useState('')
@@ -911,10 +988,10 @@ window.__ModuleLoader__.load({
           const canPlan = face !== null && face !== undefined && typeof face.plan === 'function'
           const canApply = face !== null && face !== undefined && typeof face.apply === 'function'
       
-          // Loading refs is what OPENS the panel, so it is also what makes the first
-          // claim: not "there is an update" but "here is what this checkout knows".
+          // The fetch itself: no state of its own beyond the results, so it can be
+          // called from the trigger, from the panel's own reload button, and from a
+          // retry, without any of them repeating another's claim.
           function loadRefs() {
-            setOpen(true)
             if (!canAsk) {
               setRefs({ phase: 'error', data: null, error: t('noHost') })
               return
@@ -931,6 +1008,16 @@ window.__ModuleLoader__.load({
                 setPicked((current) => (current.length > 0 ? current : first === null ? '' : first.value))
               })
               .catch((error) => setRefs({ phase: 'error', data: null, error: error && error.message ? error.message : String(error) }))
+          }
+      
+          // The trigger does BOTH things in one click: opening the panel is what puts
+          // the ref list on screen, so opening without reading would show an empty box.
+          // It is deliberately a handler rather than an effect on `open` — an effect
+          // has to decide whether this open is a new one, and "did I already fetch" is
+          // state the click already knows the answer to.
+          function openPanel() {
+            setOpen(true)
+            loadRefs()
           }
       
           function askRemote() {
@@ -988,6 +1075,70 @@ window.__ModuleLoader__.load({
               .catch((error) => setRun({ phase: 'error', data: null, error: error && error.message ? error.message : String(error) }))
           }
       
+          return {
+            open,
+            refs,
+            remote,
+            picked,
+            plan,
+            run,
+            // Which host calls exist at all. The panel draws buttons for them, so the
+            // answers travel with the state rather than being recomputed there.
+            canRemote,
+            setPicked,
+            loadRefs,
+            openPanel,
+            askRemote,
+            apply,
+          }
+        }
+      
+        /**
+         * The one button a closed update panel is allowed to cost the card.
+         *
+         * It is a component rather than a bare `h('button', …)` in panel.js so that the
+         * button's size, label and disabled reason stay in this file, next to the panel
+         * it opens and the copy it uses. Its home is the fold summary's right end, and
+         * the summary's flex row is what puts it there.
+         *
+         * @param {object} props - `t`, `plugin`, `busy`, `canAsk`, `onOpen`, children.
+         * @returns {object} the button.
+         */
+        function UpdateTrigger(props) {
+          return h(
+            'button',
+            {
+              type: 'button',
+              className: 'pm-btn pm-btn-sm pm-act-btn',
+              // The card owns "busy": while a toggle write is in flight, a second write
+              // path must not be startable from the same row.
+              disabled: props.busy === true,
+              // `noHost` is only reachable through this channel, so the failure reason
+              // belongs on the control rather than in a note that never gets drawn.
+              title: props.canAsk === true ? null : props.t('noHost'),
+              onClick: props.onOpen,
+            },
+            props.children,
+          )
+        }
+      
+        /**
+         * The update panel itself — pure presentation.
+         *
+         * Everything it shows comes from `useUpdate` through props, because the trigger
+         * lives in another part of the card. It renders nothing until that trigger has
+         * opened it.
+         *
+         * @param {object} props - the `useUpdate` result, plus `t`, `plugin` and `busy`.
+         * @returns {object|null} the panel, or null while it is closed.
+         */
+        function UpdatePanel(props) {
+          const t = props.t
+          const plugin = props.plugin
+          const { refs, remote, picked, plan, run, canRemote, setPicked, loadRefs, askRemote, apply, copyText } = props
+      
+          if (props.open !== true) return null
+      
           const groups = refs.phase === 'ready' ? groupRefs(refs.data, remote.phase === 'ready' ? remote.data : null) : []
           // Named, not implied: the newest tag is preselected, and a preselection
           // nobody explained is a choice the user has to audit before trusting it.
@@ -1016,14 +1167,6 @@ window.__ModuleLoader__.load({
       
           const planData = plan.phase === 'ready' ? plan.data : null
           const runnable = planData !== null && planData.ok === true && planData.runnable === true && planData.noChangeNeeded !== true
-      
-          if (!open) {
-            return h(
-              'button',
-              { type: 'button', className: 'pm-btn pm-btn-sm', disabled: props.busy === true, onClick: loadRefs },
-              props.busy === true ? t('working') : t('updateCheck'),
-            )
-          }
       
           return h(
             'div',
@@ -1141,8 +1284,62 @@ window.__ModuleLoader__.load({
                     : null,
                   // A refusal that has a way out names it. "Not possible" with no
                   // alternative is the answer that makes a panel useless.
+                  //
+                  // When the way out is "install the tool", the panel does not stop at
+                  // naming it: the host sends the platform's own command and its
+                  // download page (`installHint`), and this renders them as something
+                  // the user can act on — a link, and the exact text to copy. The panel
+                  // never installs anything itself: it is a plugin, and running a
+                  // package manager needs a consent flow it does not have.
                   planData.kind === 'checkout' && planData.tools && planData.tools.git && planData.tools.git.available !== true
-                    ? h('div', { className: 'pm-upd-note' }, `${t('updateRequiresGit')} ${t('updateCloneHint')}`)
+                    ? h(
+                        'div',
+                        { className: 'pm-upd-fix' },
+                        h('div', { className: 'pm-upd-note' }, `${t('updateRequiresGit')} ${t('updateCloneHint')}`),
+                        planData.installHint === null || planData.installHint === undefined
+                          ? null
+                          : h(
+                              'div',
+                              { className: 'pm-upd-fix-body' },
+                              h('div', { className: 'pm-upd-fix-title' }, `${t('updateInstallTitle')} ${String(planData.installHint.tool)}`),
+                              planData.installHint.command === null || planData.installHint.command === undefined
+                                ? null
+                                : h(
+                                    'div',
+                                    { className: 'pm-upd-fix-cmd' },
+                                    h('code', { className: 'pm-mono pm-break' }, String(planData.installHint.command)),
+                                    h(
+                                      'button',
+                                      {
+                                        type: 'button',
+                                        className: 'pm-btn pm-btn-sm',
+                                        // The copy is done by `copyText`, and this button is
+                                        // only drawn when it exists.
+                                        onClick: () => copyText(String(planData.installHint.command)),
+                                      },
+                                      t('updateCopy'),
+                                    ),
+                                  ),
+                              planData.installHint.note === null || planData.installHint.note === undefined
+                                ? null
+                                : h('div', { className: 'pm-upd-note' }, String(planData.installHint.note)),
+                              h(
+                                'div',
+                                { className: 'pm-upd-actions' },
+                                h(
+                                  'a',
+                                  {
+                                    className: 'pm-btn pm-btn-sm',
+                                    href: String(planData.installHint.url),
+                                    target: '_blank',
+                                    rel: 'noreferrer noopener',
+                                  },
+                                  `${t('updateInstallOpen')} →`,
+                                ),
+                                h('span', { className: 'pm-upd-note' }, t('updateInstallManual')),
+                              ),
+                            ),
+                      )
                     : null,
                   Array.isArray(planData.warnings) && planData.warnings.length > 0
                     ? h('div', { className: 'pm-upd-note' }, planData.warnings.join(' '))
@@ -1184,8 +1381,9 @@ window.__ModuleLoader__.load({
       
         UpdatePanel.__groupRefs = groupRefs
       
-        return { UpdatePanel, groupRefs }
+        return { UpdatePanel, UpdateTrigger, groupRefs, useUpdate }
       }
+      
       
       return { createUpdatePanel }
   },
@@ -1226,7 +1424,9 @@ window.__ModuleLoader__.load({
       function createPanel(react, makeUpdatePanel) {
         const h = react.createElement
         const { useState, useEffect } = react
-        const UpdatePanel = makeUpdatePanel(react).UpdatePanel
+        // One call, three things out of it: the factory builds all of the update half
+        // together, and calling it once per export would build it three times.
+        const { UpdatePanel, UpdateTrigger, useUpdate } = makeUpdatePanel(react)
       
         /** Shorten a hash for display without lying about which one it is. */
         function short(value) {
@@ -1359,6 +1559,13 @@ window.__ModuleLoader__.load({
           const plugin = props.plugin
           const t = props.t
       
+          // The update panel's open flag lives HERE, not in the panel: the trigger is
+          // drawn in this component's control cluster (`pm-card-actions`, below), and
+          // the panel it opens is at the bottom of the fold. One flag, two places —
+          // see `useUpdate`.
+          const [updOpen, setUpdOpen] = useState(false)
+          const update = useUpdate(plugin, props.face ?? null, t, updOpen, setUpdOpen)
+      
           const spec = specIsInformative(plugin) ? plugin.spec : null
       
           // The detection result for this plugin, once a check has been run. Absent
@@ -1402,15 +1609,27 @@ window.__ModuleLoader__.load({
           return h(
             'article',
             { className: cardClassOf(plugin) },
-            // ONE row, two columns: identity takes the free space, the control and its
-            // state are pinned right. There is deliberately NO fixed width — the status
-            // used to sit right after the name, so it moved with the name's length and
-            // the list looked ragged. A grid column solves that without a magic number,
-            // and without breaking when a Chinese label and an English one differ in
-            // width by a third.
+            // TWO rows, two columns — and the rows are the whole card, not just the
+            // header:
+            //
+            //   1  identity (free space)          · switch + state (pinned right)
+            //   2  the fold's summary (1fr)       · the update trigger (pinned right)
+            //
+            // Both rows are declared here because the right column is a fixed-size
+            // fact. The card has been three lines tall twice: once because the update
+            // trigger had a full-width row of its own below the fold, and once because
+            // it sat under the switch, which made the CONTROL column two lines and the
+            // card three. Putting it on the fold's line costs nothing at all — that
+            // line already exists — and it lands on the same right edge, from the same
+            // grid column.
+            //
+            // There is deliberately NO fixed width: the status used to sit right after
+            // the name, so it moved with the name's length and the list looked ragged.
+            // A grid column solves that without a magic number, and without breaking
+            // when a Chinese label and an English one differ in width by a third.
             h(
               'div',
-              { className: 'pm-row' },
+              { className: 'pm-card-grid' },
               h(
                 'span',
                 { className: 'pm-lead' },
@@ -1433,92 +1652,125 @@ window.__ModuleLoader__.load({
               // The action, and the state it acts on. The label is also the only place
               // the restart requirement is discoverable without reading the notice.
               h(
-                'button',
-                {
-                  type: 'button',
-                  className: props.busy === true ? 'pm-switch pm-switch-busy' : enabledNow ? 'pm-switch pm-switch-on' : 'pm-switch',
-                  role: 'switch',
-                  'aria-checked': enabledNow ? 'true' : 'false',
-                  'aria-label': `${plugin.name} — ${t(stateKey)}`,
-                  disabled: props.busy === true || props.canToggle !== true,
-                  title: props.canToggle === true ? t('restartRequired') : t('writeRefused'),
-                  onClick: () => props.onToggle(plugin.name, plugin.enabled === false),
-                },
-                h('span', { className: 'pm-switch-knob' }),
+                'div',
+                { className: 'pm-card-actions' },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: props.busy === true ? 'pm-switch pm-switch-busy' : enabledNow ? 'pm-switch pm-switch-on' : 'pm-switch',
+                    role: 'switch',
+                    'aria-checked': enabledNow ? 'true' : 'false',
+                    'aria-label': `${plugin.name} — ${t(stateKey)}`,
+                    disabled: props.busy === true || props.canToggle !== true,
+                    title: props.canToggle === true ? t('restartRequired') : t('writeRefused'),
+                    onClick: () => props.onToggle(plugin.name, plugin.enabled === false),
+                  },
+                  h('span', { className: 'pm-switch-knob' }),
+                ),
+                props.busy === true ? h('span', { className: 'pm-state' }, t('working')) : stateLabel,
               ),
-              props.busy === true ? h('span', { className: 'pm-state' }, t('working')) : stateLabel,
+              h(
+                'details',
+                { className: 'pm-disclosure' },
+                // The summary names what is INSIDE ("details"), not one of the things
+                // inside it. It read `換版` — "change signal" — which describes a single
+                // field of the fold and gives no reason to open it.
+                h(
+                  'summary',
+                  { className: 'pm-fold' },
+                  h('span', { className: 'pm-fold-name' }, detect === null ? t('details') : `${t('details')} · ${t(verdictKey)}`),
+                  // The update trigger shares this line rather than owning one: the
+                  // fold's summary is the quietest line on the card, and this is the
+                  // only control that can sit beside it without a new row.
+                  //
+                  // Once the panel is open the button is GONE rather than repeated —
+                  // the panel's own 載入版本 re-reads the same ref list, and two buttons
+                  // for one action is a choice nobody asked for. While a toggle write
+                  // is in flight it is hidden too: a disabled button that reappears a
+                  // second later is a worse answer than one that was never offered.
+                  updOpen || props.busy === true
+                    ? null
+                    : h(
+                        UpdateTrigger,
+                        {
+                          t,
+                          plugin,
+                          busy: false,
+                          canAsk: props.face !== null && props.face !== undefined,
+                          // One click does both: open the panel, and read the refs it
+                          // is about to show.
+                          onOpen: update.openPanel,
+                        },
+                        t('updateCheck'),
+                      ),
+                ),
+                h(Meta, {
+                  rows: [
+                    spec === null ? null : [t('colSpec'), h('span', { className: 'pm-mono pm-break' }, spec)],
+                    [t('colChangeSignal'), plugin.changeSignal === 'resolvedDir' ? t('changeResolvedDir') : t('changeIntegrity')],
+                    // Which layer disabled it. Folded, because the state chip already
+                    // says THAT it is off; this says BY WHAT, which is a lookup.
+                    disabled === true || faulted === true
+                      ? [
+                          t('disabledBy'),
+                          h(
+                            'span',
+                            { className: 'pm-break' },
+                            plugin.disabledBy === null || plugin.disabledBy === undefined ? t(stateKey) : String(plugin.disabledBy),
+                          ),
+                        ]
+                      : null,
+                    // Secondary identity: only meaningful for the plugins they apply to,
+                    // and never worth a chip in the row above.
+                    plugin.sourceType === undefined || plugin.sourceType === null
+                      ? null
+                      : [t('sourceLabel'), sourceLabel(t, plugin.sourceType)],
+                    // These two rows used to render their own LABEL as the VALUE
+                    // ("本插件: 本插件"), which is a tautology the reader learns nothing
+                    // from. The left column is a label, so the right column has to carry
+                    // an actual answer, or the row should not exist.
+                    plugin.self === true ? [t('selfTag'), plugin.resolvedDir === null ? t('none') : plugin.resolvedDir] : null,
+                    plugin.declaresBundle === false ? [t('stateNotBundle'), t('stateLibrary')] : null,
+                    plugin.enabledReason === null || plugin.enabledReason === undefined
+                      ? null
+                      : [t(stateKey), h('span', { className: 'pm-break' }, String(plugin.enabledReason))],
+                    // Only present once a check has run. Until then the card makes no
+                    // claim about freshness at all.
+                    detect === null ? null : [t('baselineLabel'), h('span', { className: 'pm-break' }, String(detect.baseline ?? t('none')))],
+                    detect === null ? null : [t(verdictKey), h('span', { className: 'pm-break' }, String(detect.verdictReason))],
+                    // The commit is no longer the VERSION (see `versionChipFor`), but it is
+                    // still what identifies which build is running — the question a
+                    // developer editing a local checkout actually asks. Read from the
+                    // overview, so it is here without pressing anything; the detection row
+                    // is only a fallback for a payload from an older host half.
+                    commitOf(plugin, detect) === null ? null : ['commit', h('span', { className: 'pm-mono' }, commitOf(plugin, detect))],
+                    detect === null || detect.dirHash === null
+                      ? null
+                      : [
+                          'fingerprint',
+                          h(
+                            'span',
+                            { className: 'pm-mono' },
+                            `${detect.dirHash} · ${detect.fileCount ?? '?'} files${detect.dirHashTruncated === true ? ' (truncated)' : ''}`,
+                          ),
+                        ],
+                  ],
+                }),
+              ),
             ),
-            h(
-              'details',
-              { className: 'pm-disclosure' },
-              // The summary names what is INSIDE ("details"), not one of the things
-              // inside it. It read `換版` — "change signal" — which describes a single
-              // field of the fold and gives no reason to open it.
-              h('summary', null, detect === null ? t('details') : `${t('details')} · ${t(verdictKey)}`),
-              h(Meta, {
-                rows: [
-                  spec === null ? null : [t('colSpec'), h('span', { className: 'pm-mono pm-break' }, spec)],
-                  [t('colChangeSignal'), plugin.changeSignal === 'resolvedDir' ? t('changeResolvedDir') : t('changeIntegrity')],
-                  // Which layer disabled it. Folded, because the state chip already
-                  // says THAT it is off; this says BY WHAT, which is a lookup.
-                  disabled === true || faulted === true
-                    ? [
-                        t('disabledBy'),
-                        h(
-                          'span',
-                          { className: 'pm-break' },
-                          plugin.disabledBy === null || plugin.disabledBy === undefined ? t(stateKey) : String(plugin.disabledBy),
-                        ),
-                      ]
-                    : null,
-                  // Secondary identity: only meaningful for the plugins they apply to,
-                  // and never worth a chip in the row above.
-                  plugin.sourceType === undefined || plugin.sourceType === null
-                    ? null
-                    : [t('sourceLabel'), sourceLabel(t, plugin.sourceType)],
-                  // These two rows used to render their own LABEL as the VALUE
-                  // ("本插件: 本插件"), which is a tautology the reader learns nothing
-                  // from. The left column is a label, so the right column has to carry
-                  // an actual answer, or the row should not exist.
-                  plugin.self === true ? [t('selfTag'), plugin.resolvedDir === null ? t('none') : plugin.resolvedDir] : null,
-                  plugin.declaresBundle === false ? [t('stateNotBundle'), t('stateLibrary')] : null,
-                  plugin.enabledReason === null || plugin.enabledReason === undefined
-                    ? null
-                    : [t(stateKey), h('span', { className: 'pm-break' }, String(plugin.enabledReason))],
-                  // Only present once a check has run. Until then the card makes no
-                  // claim about freshness at all.
-                  detect === null ? null : [t('baselineLabel'), h('span', { className: 'pm-break' }, String(detect.baseline ?? t('none')))],
-                  detect === null ? null : [t(verdictKey), h('span', { className: 'pm-break' }, String(detect.verdictReason))],
-                  // The commit is no longer the VERSION (see `versionChipFor`), but it is
-                  // still what identifies which build is running — the question a
-                  // developer editing a local checkout actually asks. Read from the
-                  // overview, so it is here without pressing anything; the detection row
-                  // is only a fallback for a payload from an older host half.
-                  commitOf(plugin, detect) === null ? null : ['commit', h('span', { className: 'pm-mono' }, commitOf(plugin, detect))],
-                  detect === null || detect.dirHash === null
-                    ? null
-                    : [
-                        'fingerprint',
-                        h(
-                          'span',
-                          { className: 'pm-mono' },
-                          `${detect.dirHash} · ${detect.fileCount ?? '?'} files${detect.dirHashTruncated === true ? ' (truncated)' : ''}`,
-                        ),
-                      ],
-                ],
-              }),
-            ),
-            // The update control lives at the BOTTOM of the fold, after the diagnosis.
-            // Reading order is the argument: "what is this, where did it come from,
-            // what does the machine know about it" comes before "change it". It is
-            // inside the disclosure rather than in the row so the list stays scannable
-            // — see update.js for why that trade was made.
+            // The update panel is the last thing in the CARD, below the fold's summary
+            // and outside the `<details>`: the trigger is on the summary's line, and a
+            // panel nested inside the fold would disappear the moment the fold was
+            // closed. Reading order is still the argument — "what is this, where did it
+            // come from, what does the machine know about it" before "change it".
             h(UpdatePanel, {
+              ...update,
               t,
               plugin,
-              face: props.face ?? null,
               busy: props.busy === true,
               onChanged: props.onWrite,
+              copyText: props.onCopy,
             }),
           )
         }
@@ -1600,10 +1852,15 @@ window.__ModuleLoader__.load({
          * it. Exposing the units keeps the assertions honest instead of weakening
          * them to whatever the tree happens to show. Not public surface — nothing in
          * the bundle reads these.
+         *
+         * `__update` is exposed for the same reason as the card: the closed trigger
+         * lives inside the card's control cluster, so proving *where* it sits and that
+         * a click opens the panel needs the card invoked, not the tree walked.
          */
         Panel.__cardClassOf = cardClassOf
         Panel.__stateKeyOf = stateKeyOf
         Panel.__PluginCard = PluginCard
+        Panel.__update = { UpdateTrigger, UpdatePanel, useUpdate }
       
         return Panel
         function Panel(props) {
@@ -1649,6 +1906,29 @@ window.__ModuleLoader__.load({
               })
           }
       
+          /**
+           * Copy one line of host-provided text — today, an install command.
+           *
+           * Guarded at every step because none of these APIs exist in every browser,
+           * and the honest failure is to do nothing rather than to claim a copy
+           * happened. It is passed down rather than imported so the panel remains the
+           * only module that touches the DOM.
+           *
+           * @param {string} text - the text to copy.
+           * @returns {void}
+           */
+          function copyText(text) {
+            if (typeof text !== 'string' || text.length === 0) return
+            try {
+              if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                const pending = navigator.clipboard.writeText(text)
+                if (pending !== null && pending !== undefined && typeof pending.catch === 'function') pending.catch(() => undefined)
+              }
+            } catch {
+              /* a browser that refuses the clipboard is not an error worth a notice */
+            }
+          }
+      
           /** Run one detection pass. Read-only on the host side by construction. */
           function runDetect() {
             if (props.face === null || props.face === undefined || typeof props.face.detect !== 'function') {
@@ -1664,7 +1944,8 @@ window.__ModuleLoader__.load({
               })
           }
       
-          useEffect(() => {      let alive = true
+          useEffect(() => {
+            let alive = true
       
             // No face means the page had no usable fetch; say so instead of throwing,
             // so the tab still renders and the reason is visible.
@@ -1840,6 +2121,9 @@ window.__ModuleLoader__.load({
                       // from the host rather than re-render its own stale copy.
                       face: props.face ?? null,
                       onWrite: () => setTick((n) => n + 1),
+                      // Clipboard access lives in this component, so the card gets a
+                      // function rather than reaching for `navigator` itself.
+                      onCopy: copyText,
                     }),
                   ),
                 )

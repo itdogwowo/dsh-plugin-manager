@@ -105,7 +105,24 @@ export const CSS = `
    not participating, and that has to be visible before the text is read. */
 .pm-card-off{background:var(--dsw-alias-bg-layer-2,#f6f8fa)}
 .pm-card-off .pm-name{color:var(--dsw-alias-label-secondary,#656d76)}
-.pm-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px;min-width:0}
+/* The card grid. TWO rows, and they are the whole card:
+ *
+ *   1  identity (1fr)              · the switch and its state (pinned right)
+ *   2  the fold's summary (1fr)    · the update trigger (pinned right)
+ *
+ * Declaring both rows HERE, rather than letting the fold be a sibling block, is
+ * what keeps the card two lines tall. The trigger's home was the open question:
+ * a full-width row of its own made the card three lines, and putting it under
+ * the switch made the CONTROL column two lines, which is also three. On the
+ * summary's line it costs nothing — that line already exists — and the shared
+ * grid column keeps its right edge on the state label's.
+ *
+ * No fixed width anywhere: the state's position used to follow the name's
+ * length, which is what made the list look ragged. */
+.pm-card-grid{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:1px 8px;min-width:0}
+/* The fold spans both columns so its summary text starts at the card's left
+   edge and the trigger can be pushed to the right end of the same line. */
+.pm-card-grid>.pm-disclosure{grid-column:1/-1;min-width:0}
 /* Identity takes the free column. min-width:0 is what lets a long name shrink
    and wrap instead of pushing the control out of alignment. */
 .pm-lead{display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-width:0}
@@ -136,6 +153,14 @@ export const CSS = `
 .pm-state-on{color:var(--dsw-alias-state-success-primary,#1a7f37)}
 .pm-state-off{color:var(--dsw-alias-state-warn-primary,#9a6700)}
 
+/* The control cluster: the switch, then the state in words, on the card's first
+   line. It is the grid's own columns 2-3, so nothing here is positioned by a
+   magic number. */
+.pm-card-actions{grid-row:1;grid-column:2/span 2;display:flex;align-items:center;gap:8px;min-width:0}
+/* The card's own action button: the same button as any other, sized to the line
+   it shares with an 11px summary. */
+.pm-act-btn{flex:none}
+
 /* ── chips: L4 ──────────────────────────────────────────────────────────── */
 .pm-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .pm-chip{display:inline-flex;align-items:center;border-radius:999px;padding:3px 9px;font-size:12px;line-height:1.45;border:1px solid var(--dsw-alias-border-l2,#d0d7de);color:var(--dsw-alias-label-secondary,#656d76);white-space:nowrap}
@@ -144,12 +169,20 @@ export const CSS = `
 .pm-chip-self{color:var(--dsw-alias-brand-primary,#0969da);border-color:var(--dsw-alias-brand-primary,#0969da)}
 
 /* ── L5/L6 disclosures: diagnostics live down here, out of the way ──────── */
-.pm-disclosure{margin-top:1px}
-.pm-disclosure>summary{cursor:pointer;font-size:11px;color:var(--dsw-alias-label-secondary,#656d76);list-style:none;padding:1px 0;display:inline-flex;align-items:center;gap:5px}
+.pm-disclosure{margin-top:0}
+/* The summary is the card's second line, and it is a FLEX row rather than an
+   inline summary: the fold's name sits at the left edge and the update trigger
+   is pushed to the right end, on the same line. A summary element is a flex
+   container like any other box — the disclosure behaviour is in the element, not
+   in the display. */
+.pm-disclosure>summary.pm-fold{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;color:var(--dsw-alias-label-secondary,#656d76);list-style:none;padding:1px 0}
+.pm-fold-name{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
 .pm-disclosure>summary::-webkit-details-marker{display:none}
-.pm-disclosure>summary::before{content:'▸';font-size:9px;display:inline-block;width:8px}
+.pm-disclosure>summary::before{content:'▸';font-size:9px;display:inline-block;width:8px;flex:none}
 .pm-disclosure[open]>summary::before{content:'▾'}
-.pm-disclosure>summary:hover{color:var(--dsw-alias-brand-primary,#0969da)}
+/* The colour change is the FOLD's affordance, so it must not also fire when the
+   pointer is over the update trigger sharing this line. */
+.pm-disclosure>summary:hover .pm-fold-name{color:var(--dsw-alias-brand-primary,#0969da)}
 .pm-meta{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:5px 0 0;font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
 .pm-meta dt{white-space:nowrap}
 .pm-meta dd{margin:0;overflow-wrap:anywhere}
@@ -210,6 +243,21 @@ export const CSS = `
 .pm-upd-step{color:var(--dsw-alias-state-success-primary,#1a7f37)}
 .pm-upd-step-bad{color:var(--dsw-alias-state-error-primary,#cf222e)}
 .pm-upd-step .pm-upd-note{margin-left:6px}
+
+/* The way out of a refusal. It is the ONE place the update panel offers
+   something to DO about a missing tool, so it is set apart from the notes
+   around it rather than looking like one more line of explanation. */
+.pm-upd-fix{display:flex;flex-direction:column;gap:5px;border-left:3px solid var(--dsw-alias-state-warn-primary,#9a6700);background:var(--dsw-alias-bg-layer-1,#f6f8fa);border-radius:0 8px 8px 0;padding:7px 10px}
+.pm-upd-fix-body{display:flex;flex-direction:column;gap:5px}
+.pm-upd-fix-title{font-weight:600}
+/* The command is the point of the block: monospace, selectable, and on its own
+   line so a long one wraps instead of pushing the copy button off the panel. */
+.pm-upd-fix-cmd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 7px;border:1px solid var(--dsw-alias-border-l1,#d8dee4);border-radius:6px;background:var(--dsw-alias-bg-base,#ffffff)}
+.pm-upd-fix-cmd code{flex:1 1 auto;min-width:0;font-size:11px;user-select:all}
+.pm-upd-fix .pm-upd-actions{align-items:center}
+/* An anchor styled as a button keeps its underline off: it is a control here,
+   not a link inside a sentence. */
+a.pm-btn{display:inline-flex;align-items:center;text-decoration:none}
 
 /* Hover borders and the switch knob: both are motion, both stop when asked. */
 @media (prefers-reduced-motion: reduce){.pm-card,.pm-btn,.pm-switch,.pm-switch-knob{transition:none}}
