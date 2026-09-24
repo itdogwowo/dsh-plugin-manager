@@ -1,0 +1,9 @@
+{
+  "modules": [
+    "copy.js",
+    "styles.js",
+    "face.js",
+    "update.js",
+    "panel.js"
+  ]
+}

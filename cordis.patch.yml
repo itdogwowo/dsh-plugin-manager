@@ -1,0 +1,13 @@
+# Bundle patch for dsh-plugin-manager.
+#
+# One row inserts the host half. The browser half needs no row here: the host's
+# client-modules scan finds it through this package's `dsh.client` declaration
+# plus the `exports["./client"]` bundle, and serves it as a web plugin entry
+# whose id is the package name (see docs/host-notes.md F7).
+#
+# Row id is load-bearing: it must stay distinct from the package name, otherwise
+# `client-modules` resolves two install locations for one package and throws
+# ("resolves from multiple active Loader sources").
+- insert:
+    - id: plugin-manager
+      name: 'dsh-plugin-manager'

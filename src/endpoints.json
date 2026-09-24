@@ -1,0 +1,18 @@
+{
+  "prefix": "/api/dsh-plugin-manager",
+  "endpoints": {
+    "overview": "overview",
+    "backend": "backend",
+    "detect": "detect",
+    "refs": "refs",
+    "remoteRefs": "remote-refs",
+    "plan": "plan",
+    "apply": "apply",
+    "rollback": "rollback",
+    "toggle": "toggle"
+  },
+  "method": "GET",
+  "writeMethod": "POST",
+  "writeEndpoints": ["toggle", "remoteRefs", "apply", "rollback"],
+  "note": "apply and rollback change the profile and are the only routes that take a snapshot; toggle edits the user's cordis.patch.yml; remoteRefs is a POST because it is the one route that contacts the network, so it can never be reached by a GET, a prefetch or a page load"
+}
