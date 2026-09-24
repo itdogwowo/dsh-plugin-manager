@@ -99,9 +99,11 @@ function createReact() {
      * (the search query). Slot order is the component's call order: tick, query,
      * state, effect.
      * @param {object[]} values - slot values, in call order.
+     * @param {number} [from] - first slot index; the card's own hooks start after
+     *   the panel's, so a card mounted by hand seeds at a cursor, not at 0.
      */
-    __seed(values) {
-      for (let i = 0; i < values.length; i += 1) hooks[i] = values[i]
+    __seed(values, from = 0) {
+      for (let i = 0; i < values.length; i += 1) hooks[from + i] = values[i]
     },
   }
 
@@ -711,10 +713,19 @@ test('panel: the update trigger shares the fold line, and goes away once open', 
   // And the card with the panel OPEN keeps the same two lines with the trigger
   // gone — the other half of the same layout claim. The flag is the card's first
   // hook, and the stub can mount with it already set.
+  //
+  // The offset is READ from the stub rather than assumed: `renderPanel` has
+  // already consumed its own slots for the panel it rendered, and the card's
+  // hooks start after them.
   const react = renderPanel.__react
   assert.notEqual(react, undefined, 'the react stub must be reachable to mount an open card')
+  // The offset is READ from the stub rather than assumed: `renderPanel` has
+  // already consumed its own slots for the panel it rendered, so the card's first
+  // hook is slot `cardStart`, and the seed has to land there.
+  const cardStart = react.__cursor()
   react.__begin()
-  react.__seed([true]) // `updOpen`
+  react.__cursor(cardStart)
+  react.__seed([true], cardStart) // `updOpen` is the card's FIRST hook
   const openCard = PluginCard(cardProps(pluginRow({ name: 'upd-tool' })))
   const openSummary = findByClass(openCard, 'pm-fold')[0]
   assert.deepEqual(
@@ -801,6 +812,127 @@ test('panel: a missing tool comes with a way to install it, on the host’s term
     plan: { phase: 'ready', error: null, data: { ...open.plan.data, runnable: true, tools: { git: { available: true }, dsh: null }, installHint: null } },
   })
   assert.equal(findByClass(runnable, 'pm-upd-fix').length, 0, 'no hint when nothing is missing')
+})
+
+test('panel: applying an update calls the host and never throws', async () => {
+  // The regression this exists for: `apply` lived in a component and then moved
+  // into a hook, and the `props.onChanged()` it carried came along — a live
+  // `props is not defined` in the browser. No test caught it, because the panel
+  // is only ever RENDERED here, never DRIVEN: the button's handler is a closure
+  // that runs when a user presses 更新, and this stub never presses anything.
+  //
+  // So this case presses it: the handler is called the way React would call it,
+  // against a face that answers.
+  const { exports, react } = loadBundle()
+  let Panel = null
+  exports.apply({
+    effect: (callback) => {
+      callback()
+      return () => {}
+    },
+    slots: {
+      inject: (key, callback) => callback(),
+      register: (options, component) => {
+        Panel = component
+        return () => {}
+      },
+    },
+    locale: { register: () => () => {}, bind: () => (key) => `T:${key}` },
+    get: () => undefined,
+  })
+  assert.notEqual(Panel, null, 'the tab must register')
+  const upd = Panel.__update
+
+  const applied = []
+  const face = {
+    apply: (name, ref) => {
+      applied.push({ name, ref })
+      return Promise.resolve({ ok: true, steps: [], snapshot: { id: 's1' }, rollback: null })
+    },
+  }
+  const t = (key) => `T:${key}`
+
+  // `window.confirm` is the destructive-action gate; this file has no window, so
+  // the handler must also work when it is absent.
+  react.__begin()
+  const controller = upd.useUpdate(pluginRow({ name: 'upd-tool' }), face, t, true, () => undefined)
+
+  const panel = upd.UpdatePanel({
+    ...controller,
+    open: true,
+    t,
+    picked: 'branch:main',
+    plan: { phase: 'ready', error: null, data: { ok: true, kind: 'checkout', runnable: true, noChangeNeeded: false, tools: { git: { available: true } } } },
+    copyText: () => undefined,
+  })
+  assert.notEqual(panel, null, 'the panel must render')
+
+  const updateButton = findByClass(panel, 'pm-btn')
+    .filter((node) => node.type === 'button')
+    .find((node) => JSON.stringify(node.children).includes('T:updateApply'))
+  assert.notEqual(updateButton, undefined, 'the 更新 button must exist')
+  assert.equal(updateButton.props.disabled, false, 'a runnable plan enables it')
+
+  assert.doesNotThrow(() => updateButton.props.onClick(), 'pressing 更新 must not throw')
+  // `picked` is the picker's own state and this hook instance never selected
+  // anything, so the ref sent is null — which the host reads as "the ref this
+  // checkout is already on" (`picked.slice` in `apply`). What matters here is
+  // that the click reached the host at all, with the plugin's own name.
+  assert.deepEqual(applied, [{ name: 'upd-tool', ref: null }], 'and it must ask the host to apply, by name')
+})
+
+test('panel: a successful update makes the card re-read the list', async () => {
+  // The other half of the same contract: after the host moves the checkout the
+  // panel must not keep showing its own stale copy. The HOOK reports the outcome
+  // and the CARD reloads — so the condition under test is `run.data.ok`, and the
+  // card is rendered with that state already in place.
+  const { exports, react } = loadBundle()
+  let Panel = null
+  exports.apply({
+    effect: (callback) => {
+      callback()
+      return () => {}
+    },
+    slots: {
+      inject: (key, callback) => callback(),
+      register: (options, component) => {
+        Panel = component
+        return () => {}
+      },
+    },
+    locale: { register: () => () => {}, bind: () => (key) => `T:${key}` },
+    get: () => undefined,
+  })
+  assert.notEqual(Panel, null, 'the tab must register')
+
+  // Hook slots in PluginCard's call order: 0 `updOpen`, then the hook's own
+  // refs / remote / picked / plan / run, then the reload effect. Only `run`
+  // matters to the condition under test.
+  const seedRuns = (run) => {
+    react.__begin()
+    react.__seed([
+      true,
+      { phase: 'ready', data: null, error: null },
+      { phase: 'idle', data: null, error: null },
+      '',
+      { phase: 'idle', data: null, error: null },
+      run,
+    ])
+  }
+
+  const writes = []
+  const onWrite = () => writes.push('reload')
+
+  seedRuns({ phase: 'ready', data: { ok: true }, error: null })
+  Panel.__PluginCard({ ...cardProps(pluginRow({ name: 'upd-tool' })), onWrite })
+  assert.deepEqual(writes, ['reload'], 'an update that succeeded must make the card re-read the host')
+
+  // A failed one must NOT reload: a rollback has a result to show, and re-reading
+  // the list would bury it under a fresh render.
+  writes.length = 0
+  seedRuns({ phase: 'ready', data: { ok: false, rollback: { ok: true } }, error: null })
+  Panel.__PluginCard({ ...cardProps(pluginRow({ name: 'upd-tool' })), onWrite })
+  assert.deepEqual(writes, [], 'a refused or rolled-back update must not reload the list')
 })
 
 test('panel: pressing the update trigger opens the panel and reads this checkout', async () => {

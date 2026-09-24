@@ -226,11 +226,16 @@ export function createUpdatePanel(react) {
       face
         .apply(plugin.name, ref)
         .then((data) => {
-          setRun({ phase: 'ready', data, error: null })
           // The list above the card is now stale (spec, version, commit), so it
-          // is reloaded — the panel must show the host's new state, not this
-          // component's assumption about what the update did.
-          if (typeof props.onChanged === 'function') props.onChanged()
+          // has to be reloaded — the panel must show the host's new state, not
+          // this hook's assumption about what the update did.
+          //
+          // The reload is NOT started here. This is a hook: it has no `props`,
+          // and reaching for one is exactly the bug this comment replaces — a
+          // `props is not defined` that no test caught because `apply` only runs
+          // when somebody presses 更新. The card watches `run` and reloads (see
+          // PluginCard), which also keeps the side effect where the data is.
+          setRun({ phase: 'ready', data, error: null })
         })
         .catch((error) => setRun({ phase: 'error', data: null, error: error && error.message ? error.message : String(error) }))
     }

@@ -192,13 +192,41 @@ function realFs() {
 }
 
 /**
+ * The real `fs` service with NO executable on disk.
+ *
+ * `probeGit` has two authorities on "does this executable exist": the subprocess
+ * seam's `resolveExecutable`, and `fs.stat` for absolute install paths. A test
+ * about a MISSING tool has to answer for both, or it silently depends on whether
+ * the machine running it happens to have git installed (this one does).
+ *
+ * Everything else stays REAL: the routes under test read the profile through
+ * this same service, and a blanket stub would replace the deployment with
+ * nothing and pass for the wrong reason.
+ *
+ * @returns {object} the `fs` service, with `stat` refusing every path.
+ */
+function fsWithoutTools() {
+  const real = realFs()
+  return {
+    ...real,
+    async stat() {
+      return undefined
+    },
+  }
+}
+
+/**
  * Mount the real route layer against real services.
+ * @param {object} [options] - `resolveExecutable` replaces the real resolver and
+ *   `fs` replaces the file service, so a test about a missing tool can say so
+ *   instead of inheriting this machine's.
  * @returns {{ routes: object[], services: object, probes: string[] }} what was registered.
  */
-function mountRealRoutes() {
+function mountRealRoutes(options = {}) {
   const routes = []
   const probes = []
   const subprocess = createRealSubprocess()
+  const resolve = typeof options.resolveExecutable === 'function' ? options.resolveExecutable : (command) => subprocess.resolveExecutable(command)
   // Wrap the two probe entry points so the test can assert WHICH tools a route
   // asked for. A route that probes `git` for a registry plugin is doing work
   // nobody asked for.
@@ -206,10 +234,10 @@ function mountRealRoutes() {
     ...subprocess,
     async resolveExecutable(command) {
       probes.push(String(command))
-      return subprocess.resolveExecutable(command)
+      return resolve(command)
     },
   }
-  const services = { fs: realFs(), subprocess: tracked }
+  const services = { fs: options.fs ?? realFs(), subprocess: tracked }
   const ctx = {
     effect(callback, label) {
       callback()
@@ -328,7 +356,12 @@ test('update routes: apply refuses a GET, because it takes a snapshot and writes
 
 test('update routes: apply on a checkout with no git refuses and changes NOTHING', async () => {
   await withDeployment(async ({ profileDir }) => {
-    const { routes } = mountRealRoutes()
+    // This machine HAS git (it is on PATH now), so "no git" is stated rather
+    // than inherited: the test is about what the route does when the tool is
+    // absent, and it must not start passing or failing because of the host it
+    // runs on. BOTH authorities have to answer "no" — the subprocess resolver and
+    // the `fs.stat` fallback that checks absolute install paths.
+    const { routes } = mountRealRoutes({ resolveExecutable: () => null, fs: fsWithoutTools() })
     const before = readFileSync(join(profileDir, 'package.json'), 'utf8')
 
     const res = fakeRes()

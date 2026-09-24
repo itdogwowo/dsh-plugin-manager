@@ -1066,11 +1066,16 @@ window.__ModuleLoader__.load({
             face
               .apply(plugin.name, ref)
               .then((data) => {
-                setRun({ phase: 'ready', data, error: null })
                 // The list above the card is now stale (spec, version, commit), so it
-                // is reloaded — the panel must show the host's new state, not this
-                // component's assumption about what the update did.
-                if (typeof props.onChanged === 'function') props.onChanged()
+                // has to be reloaded — the panel must show the host's new state, not
+                // this hook's assumption about what the update did.
+                //
+                // The reload is NOT started here. This is a hook: it has no `props`,
+                // and reaching for one is exactly the bug this comment replaces — a
+                // `props is not defined` that no test caught because `apply` only runs
+                // when somebody presses 更新. The card watches `run` and reloads (see
+                // PluginCard), which also keeps the side effect where the data is.
+                setRun({ phase: 'ready', data, error: null })
               })
               .catch((error) => setRun({ phase: 'error', data: null, error: error && error.message ? error.message : String(error) }))
           }
@@ -1565,6 +1570,18 @@ window.__ModuleLoader__.load({
           // see `useUpdate`.
           const [updOpen, setUpdOpen] = useState(false)
           const update = useUpdate(plugin, props.face ?? null, t, updOpen, setUpdOpen)
+      
+          // An update that went through changes the spec, the version and the commit,
+          // so the list has to be re-read from the host — the panel must not keep
+          // showing its own stale copy. The HOOK reports the outcome and the card
+          // reloads: a `props.onChanged()` inside the hook was a live crash
+          // (`props is not defined`) that no test reached, because `apply` only runs
+          // when a user presses 更新. This is also where the side effect belongs —
+          // the card is what re-reads the list.
+          const updatedOk = update.run.phase === 'ready' && update.run.data !== null && update.run.data.ok === true
+          useEffect(() => {
+            if (updatedOk && typeof props.onWrite === 'function') props.onWrite()
+          }, [updatedOk])
       
           const spec = specIsInformative(plugin) ? plugin.spec : null
       

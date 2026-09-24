@@ -176,6 +176,18 @@ export function createPanel(react, makeUpdatePanel) {
     const [updOpen, setUpdOpen] = useState(false)
     const update = useUpdate(plugin, props.face ?? null, t, updOpen, setUpdOpen)
 
+    // An update that went through changes the spec, the version and the commit,
+    // so the list has to be re-read from the host — the panel must not keep
+    // showing its own stale copy. The HOOK reports the outcome and the card
+    // reloads: a `props.onChanged()` inside the hook was a live crash
+    // (`props is not defined`) that no test reached, because `apply` only runs
+    // when a user presses 更新. This is also where the side effect belongs —
+    // the card is what re-reads the list.
+    const updatedOk = update.run.phase === 'ready' && update.run.data !== null && update.run.data.ok === true
+    useEffect(() => {
+      if (updatedOk && typeof props.onWrite === 'function') props.onWrite()
+    }, [updatedOk])
+
     const spec = specIsInformative(plugin) ? plugin.spec : null
 
     // The detection result for this plugin, once a check has been run. Absent
