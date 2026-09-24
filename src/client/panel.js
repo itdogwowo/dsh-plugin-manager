@@ -467,6 +467,163 @@ export function createPanel(react, makeUpdatePanel) {
   }
 
   /**
+   * The install field: type a spec, see the plan, then decide.
+   *
+   * ## Why this is two deliberate steps and not one button
+   *
+   * Every other manager in this ecosystem puts a text field and an Install
+   * button next to each other, and the button becomes a leap of faith. The
+   * package's one claim is that the answer arrives BEFORE anything is touched, so
+   * the field cannot be allowed to violate it: typing produces nothing, "check
+   * the plan" produces the plan, and only a plan that came back runnable offers
+   * the button at all.
+   *
+   * ## The three states of the plan are rendered differently on purpose
+   *
+   * "not in the profile" (a fresh install), "replaces the recorded spec" and
+   * "already this exact spec" are different situations with different
+   * consequences, and a UI that collapsed them into "ok" would be hiding the one
+   * thing the user needs. Likewise `tools.dsh` carries three values: found, not
+   * found, and `null` meaning NOT PROBED — which is not the same as unavailable
+   * and must never be shown as it.
+   */
+  function InstallField(props) {
+    const t = props.t
+    const plan = props.plan
+    const busy = props.busy === true
+    const inspecting = plan !== null && plan !== undefined && plan.phase === 'checking'
+    const refusing = plan !== null && plan !== undefined && plan.phase === 'ready' && plan.data.ok !== true
+    const runnable = plan !== null && plan !== undefined && plan.phase === 'ready' && plan.data.ok === true && plan.data.runnable === true
+    const data = plan !== null && plan !== undefined && plan.phase === 'ready' ? plan.data : null
+
+    const lines = []
+    if (data !== null) {
+      lines.push(data.summary)
+      lines.push(
+        data.alreadyInstalled !== true
+          ? t('installFresh')
+          : data.sameSpec === true
+            ? t('installSameSpec')
+            : `${t('installReplaces')} ${String(data.current ?? t('none'))}`,
+      )
+      if (data.name === null || data.name === undefined) lines.push(t('installNoName'))
+      for (const warning of data.warnings ?? []) lines.push(warning)
+    }
+
+    const tool = data === null ? null : data.tools === null || data.tools === undefined ? null : data.tools.dsh
+    const toolText =
+      tool === null || tool === undefined
+        ? t('installToolNotProbed')
+        : tool.available === true
+          ? t('installToolReady')
+          : t('installToolMissing')
+
+    return h(
+      'div',
+      { className: 'pm-install' },
+      h('div', { className: 'pm-install-title' }, t('installTitle')),
+      h('div', { className: 'pm-install-lead' }, t('installHint')),
+      h(
+        'div',
+        { className: 'pm-install-row' },
+        h('input', {
+          id: 'pm-install-spec',
+          type: 'text',
+          className: 'pm-input',
+          placeholder: t('installPlaceholder'),
+          value: props.spec,
+          disabled: busy,
+          onChange: (event) => props.onSpec(event.target && typeof event.target.value === 'string' ? event.target.value : ''),
+          onKeyDown: (event) => {
+            if (event.key === 'Enter') props.onPlan()
+          },
+        }),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'pm-btn',
+            disabled: busy || inspecting || props.spec.trim().length === 0,
+            onClick: () => props.onPlan(),
+          },
+          inspecting ? t('installPlanning') : t('installPlan'),
+        ),
+      ),
+
+      // A refusal is an ANSWER, not a blank: the reason is the whole product.
+      refusing
+        ? h(Notice, {
+            bad: true,
+            title: t('installRefused'),
+            body: h(
+              'div',
+              null,
+              h('div', null, String(data.error ?? '')),
+              h('div', { className: 'pm-install-steps' }, t('installByHand')),
+              h('code', { className: 'pm-code' }, `dsh plugin --profile <profile> add ${props.spec}`),
+            ),
+          })
+        : null,
+
+      data === null || data.ok !== true
+        ? null
+        : h(
+            'div',
+            { className: 'pm-install-plan' },
+            h('div', { className: 'pm-install-steps' }, t('installCommand')),
+            h('code', { className: 'pm-code pm-break' }, (data.displayArgv ?? data.argv ?? []).join(' ')),
+            h(
+              'div',
+              { className: 'pm-install-meta' },
+              `${t('installToolDsh')}：${toolText}`,
+              data.runnable === true ? null : ` · ${String(data.runError ?? '')}`,
+            ),
+            h('ul', { className: 'pm-install-notes' }, lines.filter((line) => typeof line === 'string').map((line, index) => h('li', { key: `plan-${String(index)}` }, line))),
+            h('div', { className: 'pm-install-note' }, t('installPipeline')),
+            runnable
+              ? h(
+                  'div',
+                  { className: 'pm-install-actions' },
+                  h('button', { type: 'button', className: 'pm-btn pm-btn-run', disabled: busy, onClick: () => props.onRun() }, busy ? t('installRunning') : t('installRun')),
+                  h('span', { className: 'pm-install-goal' }, t('installGoal')),
+                )
+              : null,
+          ),
+
+      // The run outcome. Success and the restart are stated in the same breath,
+      // for the same reason the toggle notice pairs them: "installed" that has
+      // not loaded yet is not the same as "working".
+      props.result === null || props.result === undefined
+        ? null
+        : props.result.ok === true
+          ? h(Notice, {
+              title: t('installResultOk'),
+              body: h(
+                'div',
+                null,
+                h('div', null, `${t('installResultSpec')}：${String(props.result.recordedSpec ?? t('none'))}`),
+                h('div', null, t('installResultRestart')),
+              ),
+            })
+          : h(Notice, {
+              bad: true,
+              title: t('installResultFailed'),
+              body: h(
+                'div',
+                null,
+                h('div', null, String(props.result.error ?? '')),
+                h(
+                  'div',
+                  null,
+                  `${t('installResultRollback')}：${props.result.rollback !== null && props.result.rollback !== undefined && props.result.rollback.ok === true ? t('installResultRestored') : t('installResultFresh')}`,
+                ),
+                (props.result.residue ?? []).length === 0 ? null : h('ul', { className: 'pm-install-notes' }, props.result.residue.map((item, index) => h('li', { key: `residue-${String(index)}` }, String(item)))),
+              ),
+            }),
+    )
+  }
+
+  /**
    * Attached for tests. `PluginCard` and its two rules cannot be observed from
    * the descriptor tree: `h(PluginCard, …)` is a component descriptor and the
    * test stub deliberately never invokes components, so the class name, the
@@ -482,6 +639,7 @@ export function createPanel(react, makeUpdatePanel) {
   Panel.__cardClassOf = cardClassOf
   Panel.__stateKeyOf = stateKeyOf
   Panel.__PluginCard = PluginCard
+  Panel.__InstallField = InstallField
   Panel.__update = { UpdateTrigger, UpdatePanel, useUpdate }
 
   return Panel
@@ -498,6 +656,22 @@ export function createPanel(react, makeUpdatePanel) {
     // that card shows "working", and `outcome` holds the last write result.
     const [writing, setWriting] = useState(null)
     const [outcome, setOutcome] = useState(null)
+    // The install field. Its own state rather than a flag on `outcome`, because
+    // a plan, a refusal and a run result are three different things that happen
+    // at three different moments — collapsing them would make "the plan is
+    // stale" unrepresentable, and a stale plan is a plan for the wrong spec.
+    const [spec, setSpec] = useState('')
+    const [planState, setPlanState] = useState(null)
+    const [installResult, setInstallResult] = useState(null)
+    const [installing, setInstalling] = useState(false)
+
+    // A plan describes ONE spec. Editing the field invalidates it, and leaving it
+    // on screen would show a command for something the user is no longer asking
+    // about — which is worse than showing nothing.
+    useEffect(() => {
+      setPlanState((current) => (current !== null && current !== undefined && current.spec !== spec ? null : current))
+      setInstallResult((current) => (current !== null && current !== undefined && current.spec !== spec ? null : current))
+    }, [spec])
 
     /**
      * Set one plugin's enabled state.
@@ -525,6 +699,66 @@ export function createPanel(react, makeUpdatePanel) {
         .catch((error) => {
           setWriting(null)
           setOutcome({ ok: false, id, error: error && error.message ? error.message : String(error), restartRequired: false })
+        })
+    }
+
+    /**
+     * Ask the host what installing the typed spec would do. Nothing is written.
+     *
+     * The refusal path matters as much as the success path: an unacceptable spec
+     * comes back as `ok: false` WITH a reason, and that reason is displayed
+     * verbatim. A field that silently does nothing when you press the button is
+     * the failure this whole flow exists to avoid.
+     */
+    function runPlan() {
+      const wanted = spec.trim()
+      if (wanted.length === 0) return
+      if (props.face === null || props.face === undefined || typeof props.face.planInstall !== 'function') {
+        setPlanState({ phase: 'ready', spec: wanted, data: { ok: false, error: t('noHost') } })
+        return
+      }
+      setPlanState({ phase: 'checking', spec: wanted, data: null })
+      setInstallResult(null)
+      props.face
+        .planInstall(wanted)
+        .then((result) => setPlanState({ phase: 'ready', spec: wanted, data: result }))
+        .catch((error) => setPlanState({ phase: 'ready', spec: wanted, data: { ok: false, error: error && error.message ? error.message : String(error) } }))
+    }
+
+    /**
+     * Run the planned install through the pipeline.
+     *
+     * The PLAN is sent, not the field: the spec the user reviewed is the spec that
+     * runs, even if they kept typing afterwards. On success the panel reloads,
+     * because what is listed must come from the host rather than from an
+     * assumption about what the CLI did.
+     */
+    function runInstall() {
+      const planned = planState === null || planState === undefined || planState.data === null ? null : planState.data
+      if (planned === null || planned.ok !== true) return
+      if (props.face === null || props.face === undefined || typeof props.face.apply !== 'function') {
+        setInstallResult({ ok: false, spec: planned.spec, error: t('noHost') })
+        return
+      }
+      setInstalling(true)
+      setInstallResult(null)
+      props.face
+        .apply(planned.name ?? null, null, { verb: 'add', spec: planned.spec })
+        .then((result) => {
+          setInstalling(false)
+          setInstallResult({ ...result, spec: planned.spec })
+          if (result !== null && result !== undefined && result.ok === true) {
+            setTick((n) => n + 1)
+            // The plan described the profile as it was BEFORE this install, so it
+            // is now out of date by definition. The run result below carries what
+            // the user needs next.
+            setPlanState(null)
+            setSpec('')
+          }
+        })
+        .catch((error) => {
+          setInstalling(false)
+          setInstallResult({ ok: false, spec: planned.spec, error: error && error.message ? error.message : String(error) })
         })
     }
 
@@ -637,6 +871,27 @@ export function createPanel(react, makeUpdatePanel) {
       { className: 'pm-head' },
       h('div', { className: 'pm-h1' }, h('h3', { className: 'pm-title' }, t('tab')), h('span', { className: 'pm-count' }, String(plugins.length))),
     )
+
+    // ── the install field ───────────────────────────────────────────────────
+    // Offered only where a change has somewhere to go: with an unreadable
+    // manifest the host cannot tell what is installed, so it cannot say whether
+    // a spec is new or a replacement — and that answer is the point of the plan.
+    const installField =
+      unresolved || absent
+        ? null
+        : h(InstallField, {
+            t,
+            spec,
+            // Held busy while the list is still loading, so the field cannot be
+            // used against a profile the panel has not read yet: the plan's whole
+            // value is comparing the spec against what IS installed.
+            busy: installing || state.phase !== 'ready',
+            plan: planState,
+            result: installResult,
+            onSpec: setSpec,
+            onPlan: runPlan,
+            onRun: runInstall,
+          })
 
     // ── section 1: the plugins ──────────────────────────────────────────────
     // The input carries a real <label>, not just a placeholder: a placeholder
@@ -842,6 +1097,7 @@ export function createPanel(react, makeUpdatePanel) {
                 body: String(outcome.error ?? ''),
               }),
         unresolved ? null : controls,
+        installField,
         inventory,
       ),
 

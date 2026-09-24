@@ -236,6 +236,286 @@ export async function planUpdate(input) {
 }
 
 /**
+ * Whether a spec is acceptable as an ARGUMENT to the official CLI.
+ *
+ * ## What this defends against, precisely
+ *
+ * A spec is DATA, not a command: it is handed to `spawn` inside an argv array,
+ * never interpolated into a shell string, so there is no shell injection here and
+ * this function must not be described as preventing one. What a spec *does*
+ * become is **one argument of `dsh plugin add`**, and that is the whole attack
+ * surface:
+ *
+ * - a value starting with `-` is parsed by the CLI as an OPTION (`--help`,
+ *   `--global`), not as a package — the realistic way a UI text field turns into
+ *   an unintended action;
+ * - a control character or a newline has no legitimate use in a spec, so its
+ *   presence means someone is probing;
+ * - a non-ASCII payload invites homoglyph confusion in a list a human reviews.
+ *
+ * ## Deliberately strict, because there is a way out
+ *
+ * This refuses anything it does not positively recognise. A user whose legal
+ * spec is rejected is not stuck: the official CLI still accepts it by hand, and
+ * the refusal message says so. The panel is a convenience, not the only door —
+ * which is what makes strictness the right call here rather than a guessing game
+ * about what pnpm might accept.
+ *
+ * @param {unknown} spec - the candidate spec.
+ * @returns {{ ok: boolean, spec: string|null, error: string|null }} the verdict.
+ */
+export function checkPackageSpec(spec) {
+  const value = str(spec)
+  if (value === null) return { ok: false, spec: null, error: 'a package name or spec is required' }
+
+  if (value.startsWith('-')) {
+    return {
+      ok: false,
+      spec: null,
+      error: `"${value}" starts with a hyphen, so the CLI would read it as an option rather than a package. Remove the hyphen, or install it by hand with: dsh plugin --profile <profile> add <spec>`,
+    }
+  }
+
+  // oxlint-disable-next-line no-control-regex -- matching control characters IS the check
+  if (/[\u0000-\u001f\u007f]/.test(value)) {
+    return { ok: false, spec: null, error: 'a spec cannot contain control characters or line breaks' }
+  }
+
+  // Shell metacharacters are not shell injection here (argv, not a shell string),
+  // but they have no place in a package spec: every one of them means the value
+  // is a command someone pasted into the wrong field. Blocking them costs a
+  // legitimate spec nothing — no registry name, URL, or path needs them.
+  if (/[$;&|<>()`'"\\]/.test(value)) {
+    return {
+      ok: false,
+      spec: null,
+      error:
+        'a spec cannot contain shell metacharacters — if this is a local path, write it with forward slashes; otherwise install it by hand with: dsh plugin --profile <profile> add <spec>',
+    }
+  }
+
+  // A scoped package is always `@scope/name`; `@1.2.3` is a mistyped version.
+  if (value.startsWith('@') && !value.slice(1).includes('/')) {
+    return { ok: false, spec: null, error: `"${value}" looks like a version, not a package: a scoped package is written @scope/name@version` }
+  }
+
+  if (!/^[\u0021-\u007e]+$/.test(value)) {
+    return { ok: false, spec: null, error: 'a spec must be printable ASCII — a non-ASCII character in a package spec is a typo or a homoglyph' }
+  }
+
+  if (value.length > 1024) {
+    return { ok: false, spec: null, error: `a spec of ${String(value.length)} characters is longer than any real one (limit 1024)` }
+  }
+
+  return { ok: true, spec: value, error: null }
+}
+
+/**
+ * The package name a spec installs AS, when that can be known without asking.
+ *
+ * ⚠️ **`null` means "cannot be told from the spec", not "no name".** A registry
+ * spec like `^1.2.0` names no package at all, and a `link:` target's name lives
+ * in the target's own `package.json`. Guessing there would produce a plan that
+ * claims to know which installed plugin it is about to replace, which is exactly
+ * the kind of false certainty this package exists to avoid. Callers must render
+ * "unknown" differently from "nothing installed".
+ *
+ * @param {string} spec - a spec that already passed {@link checkPackageSpec}.
+ * @returns {string|null} the name, or null when the spec does not carry one.
+ */
+export function nameFromSpec(spec) {
+  const value = str(spec)
+  if (value === null) return null
+
+  // github:owner/repo[#ref], and a plain owner/repo shorthand.
+  const github = /^github:([^#]+)/.exec(value)
+  if (github !== null) {
+    const segment = github[1].replace(/[\\/]+$/, '').split('/').pop() ?? ''
+    const name = segment.replace(/\.git$/, '')
+    return name.length > 0 ? name : null
+  }
+
+  // git+https://host/owner/repo.git[#ref] — the last path segment is the name.
+  if (value.startsWith('git+')) {
+    const afterScheme = value.slice(value.indexOf('://') + 3)
+    const withoutRef = afterScheme.split('#')[0]
+    const segment = withoutRef.replace(/[\\/]+$/, '').split('/').pop() ?? ''
+    const name = segment.replace(/\.git$/, '')
+    return name.length > 0 ? name : null
+  }
+
+  // An alias (`npm:real-name@range`) installs under the left-hand name, which is
+  // NOT in the spec — so this is one of the cases that must answer null.
+  if (value.startsWith('npm:')) return null
+  // A local path's name is in the target's package.json, not in the spec.
+  if (value.startsWith('link:') || value.startsWith('file:') || value.startsWith('workspace:') || value.startsWith('.')) return null
+  // A URL tarball's name is in the archive.
+  if (value.startsWith('http:') || value.startsWith('https:')) return null
+
+  // `name@range`, `@scope/name@range`, or a bare name. The scope's leading `@`
+  // makes the split position differ, which is why the search starts at 1.
+  const at = value.lastIndexOf('@')
+  if (at > 0) return value.slice(0, at)
+  if (value.startsWith('@')) return value
+  // A leading `^`/`~`/digit means this is a bare RANGE with no name: `^1.2.0`.
+  if (/^[\^~<>=*\d]/.test(value)) return null
+  return value
+}
+
+/**
+ * What installing one spec would do, decided WITHOUT touching any tool.
+ *
+ * The counterpart of {@link planUpdate} for the case that has no installed row
+ * to classify: nothing about the target is known yet, so the plan is built from
+ * the spec alone plus whatever the manifest already records under that name.
+ *
+ * @param {object} input - `{ fs, inventory, launcher, spec, profileName }`.
+ * `launcher` is the `dsh` TOOL probe (or null when the caller did not probe),
+ * which is a different object from anything read off disk.
+ * @returns {Promise<object>} plain-JSON plan, the same shape `planUpdate` returns.
+ */
+export async function planInstall(input) {
+  const out = {
+    ok: false,
+    verb: 'add',
+    name: null,
+    spec: null,
+    kind: 'install',
+    action: 'dsh-plugin-add',
+    from: null,
+    to: null,
+    current: null,
+    targetSpec: null,
+    remote: null,
+    argv: [],
+    cwd: null,
+    dryRun: true,
+    noChangeNeeded: false,
+    alreadyInstalled: false,
+    sameSpec: false,
+    summary: '',
+    error: null,
+    warnings: [],
+  }
+
+  const checked = checkPackageSpec(input?.spec)
+  if (checked.ok !== true) {
+    out.error = checked.error
+    return out
+  }
+  const spec = checked.spec
+  out.spec = spec
+  out.targetSpec = spec
+  out.to = spec
+
+  const name = nameFromSpec(spec)
+  out.name = name
+  if (name === null) {
+    out.warnings.push(
+      'this spec does not name the package it installs, so the panel cannot say whether it replaces an installed plugin — the CLI resolves the name when it runs',
+    )
+  }
+
+  // What the manifest already records under that name, when the name is knowable.
+  const inventory = input?.inventory ?? null
+  const recorded = name === null ? null : (inventory?.plugins ?? []).find((plugin) => plugin.name === name) ?? null
+  if (recorded !== null) {
+    out.alreadyInstalled = true
+    out.from = str(recorded.version)
+    out.current = str(recorded.spec)
+    out.sameSpec = out.current === spec
+    if (out.sameSpec) {
+      out.noChangeNeeded = true
+      out.warnings.push(
+        'the profile already records this exact spec. Re-running it re-resolves the source: a no-op for a pinned version, a content refetch for a URL or tag',
+      )
+    } else {
+      out.warnings.push(
+        `this REPLACES the recorded spec for ${name} (currently ${String(out.current)}) — the change is snapshotted first, so it can be rolled back`,
+      )
+    }
+  }
+
+  out.summary = out.sameSpec ? `re-resolve ${spec}` : `install ${spec}`
+  out.argv = pluginCommand(input?.profileName, 'add', spec)
+  out.ok = true
+
+  // Same rule as `planUpdate`: a plan that cannot RUN is still a plan, because
+  // the panel needs to be able to show what is missing. The tool verdict is
+  // applied to `ok` last, after the plan itself is known to be sound.
+  const probe = input?.launcher ?? null
+  if (probe !== null && probe.available !== true) {
+    out.ok = false
+    out.error = `the dsh launcher is required to install a plugin and it is unavailable: ${probe.error ?? 'it was not found on this machine'}`
+  }
+  return out
+}
+
+/**
+ * What removing one plugin would do, decided WITHOUT touching any tool.
+ *
+ * @param {object} input - `{ fs, inventory, launcher, name, profileName, selfName }`.
+ * @returns {Promise<object>} plain-JSON plan, the same shape `planUpdate` returns.
+ */
+export async function planRemoval(input) {
+  const out = {
+    ok: false,
+    verb: 'remove',
+    name: str(input?.name),
+    spec: null,
+    kind: 'remove',
+    action: 'dsh-plugin-remove',
+    from: null,
+    to: null,
+    current: null,
+    targetSpec: null,
+    remote: null,
+    argv: [],
+    cwd: null,
+    dryRun: true,
+    noChangeNeeded: false,
+    alreadyInstalled: false,
+    sameSpec: false,
+    summary: '',
+    error: null,
+    warnings: [],
+  }
+
+  if (out.name === null) {
+    out.error = 'a name is required to remove a plugin'
+    return out
+  }
+
+  const found = findPlugin(input?.inventory, out.name)
+  if (found === null) {
+    out.error = `no installed plugin is named "${out.name}", so there is nothing to remove`
+    return out
+  }
+  out.alreadyInstalled = true
+  out.from = str(found.version)
+  out.current = str(found.spec)
+
+  // Removing this very package is legal and sometimes exactly right — it is also
+  // the one removal that takes the panel away with it, and a user deserves to
+  // know that BEFORE pressing the button rather than after.
+  const selfName = str(input?.selfName)
+  if (selfName !== null && out.name === selfName) {
+    out.warnings.push('this is the plugin manager itself: removing it unloads this panel on the next restart, and the rollback button goes with it')
+  }
+
+  out.summary = `remove ${out.name}`
+  out.argv = pluginCommand(input?.profileName, 'remove', out.name)
+  out.ok = true
+
+  const probe = input?.launcher ?? null
+  if (probe !== null && probe.available !== true) {
+    out.ok = false
+    out.error = `the dsh launcher is required to remove a plugin and it is unavailable: ${probe.error ?? 'it was not found on this machine'}`
+  }
+  return out
+}
+
+/**
  * Read the git facts for one directory, tolerating every absence.
  *
  * ⚠️ **This returns FACTS ABOUT THE REPOSITORY, not about the `git` tool.** The

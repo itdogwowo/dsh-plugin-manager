@@ -411,6 +411,40 @@ $DSH_HOME/.dsh-pm/
 
 ---
 
+### 7.2 安裝欄位與 spec 守門（2026-09 session）
+
+使用者要求：「我怎樣安裝新的插件？我還想設計一個類似 docker compose / requirements 的安裝列表」。
+設計與三個決策記在 **`docs/install-manifest.md`**（清單語意只加不刪、檔案放
+`$DSH_HOME/.dsh-pm/plugin-manifest.yml`、第一步先做面板安裝欄位）。這一輪做完的是**第一步**。
+
+**規劃時查到的四個缺口**（都是實測）：
+
+| 缺口 | 位置 | 後果 |
+|---|---|---|
+| `apply` 早支援 `verb: 'add'` | `routes.js` | 管道對安裝早就能用，只是**沒有介面呼叫它** |
+| 面板沒有任何安裝 UI | `client/panel.js` | 只能走 CLI，等於放棄管道 |
+| `plan` 只支援 update | `routes.js`（走 `classifyUpdate`，找不到已裝插件就回錯） | 「先給計畫再給按鈕」對安裝不成立 |
+| `add` 對 spec **完全沒有驗證** | `src/host` 全樹 grep 不到任何檢查 | 這是**唯一沒有守門的變更路徑**：使用者給什麼字串就 spawn 什麼 |
+
+| 新增 | 檔案 | 支撐 |
+|---|---|---|
+| `checkPackageSpec`：spec 守門（拒絕 `-` 開頭、控制字元、shell 特殊字元、非 ASCII、>1024） | `src/host/pipeline.js` | 補上缺口 4 |
+| `nameFromSpec`：只在能確定時推出套件名，否則回 `null` | 同上 | 不猜「這是新的」 |
+| `planInstall` / `planRemoval`：與 `planUpdate` 同形狀的計畫 | 同上 | 補上缺口 3 |
+| `plan` 路由接受 `verb=add\|remove`，且守門跑在**讀 profile 之前** | `src/host/routes.js` | 同上 |
+| `apply` 的 `add` 路徑套用同一個守門（**兩個執行點，一次驗證**） | 同上 | 缺口 4：`apply` 可以單獨被呼叫，只在 `plan` 驗不算規則 |
+| 安裝欄位：輸入 → 檢查計畫 → 才給安裝鈕 | `src/client/panel.js`、`copy.js`、`styles.js`、`face.js` | 缺口 2 |
+| `test/install-plan.test.mjs`（22）＋ `panel-render` 的安裝欄位（7） | `test/` | 新增 29 個測試 |
+
+**這一輪修掉的一個順序 bug**：守門一開始寫在 `resolveChangeContext` **之後**，
+所以一個壞 spec 會先拿到「讀不到 profile」——兩件無關的事被混成一個答案。
+現在守門在所有 profile 讀取之前，`test/install-plan.test.mjs` 用「這個 stub 沒有 profile」
+把順序釘住。
+
+**尚未驗的**：面板要**重啟 `dsh web`** 才會有這顆欄位（宿主半改了）。見 §8.2。
+
+---
+
 ## 8. 里程碑
 
 | M | 內容 | 估時 | 完成定義 |
@@ -422,6 +456,9 @@ $DSH_HOME/.dsh-pm/
 | **M4** | ★ 變更管道：install / remove / update + 裝前驗 + 自動回滾 | 3 日 | 故意裝壞套件 → 自動回滾 → 狀態逐位元一致 |
 | **M5** | 斜線指令 `/pm` | 1 日 | `/pm verify` 出得到結果 |
 | **M6** | `boot-ok` 記錄 + 面板提示 | 半日 | 上次啟動失敗時面板提示得出來 |
+| **S1** | 安裝欄位 ＋ `add` 的計畫預覽 ＋ spec 守門 | ✅ **已寫且有測試**（29 個） | 面板打一個 spec → 看到會跑什麼 → 走完整管道。**未在真的 `dsh web` 上按過** |
+| **S2** | 安裝清單：解析 ＋ 差異比對 ＋ 產生指令（**不碰 profile**） | ⬜ | 見 `docs/install-manifest.md` §5 |
+| **S3** | 逐顆同步 ＋ 孤兒清單 ＋ 同步後報告 | ⬜ | 每顆變更都有**自己**的快照 |
 
 **M1 + M2 完成就有「裝之前告訴你會不會爆」這個核心價值。M4 完成就有自動回滾。**
 
@@ -559,6 +596,14 @@ A3 的關鍵一半（宿主半內）仍未驗，**在 T2 完成前不要開始 M
 - [ ] `pipeline.mjs` 是所有變更的唯一路徑（code review 確認沒有旁路）
 - [ ] 故意裝壞 → 自動回滾 → 狀態逐位元一致
 - [ ] 中斷恢復測試 pass
+
+**S1（安裝欄位）**
+- [x] spec 守門有測試：接受清單與拒絕清單都釘住
+- [x] 守門在**兩個**執行點（`plan` 與 `apply`），且跑在讀 profile 之前
+- [x] `planInstall` 三種狀態（新裝／同 spec／不同 spec）與「看不出名字」都有測試
+- [x] 面板渲染：沒有計畫就沒有指令、沒有安裝鈕；拒絕要渲染理由
+- [x] NOT PROBED 與 NOT AVAILABLE 渲染成不同東西
+- [ ] **在真的 `dsh web` 上按過**（需重啟宿主，見 §8.2）
 
 **發佈前**
 - [ ] `package.json` 零 `dependencies`

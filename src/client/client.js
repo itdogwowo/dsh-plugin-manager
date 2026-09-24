@@ -150,6 +150,34 @@ window.__ModuleLoader__.load({
         updateInstallOpen: '開安裝說明',
         updateInstallManual: '面板不會替你安裝：這行指令要你自己貼進終端機，看過再跑。',
       
+        installTitle: '安裝插件',
+        installHint: '輸入套件名或 spec（例如 some-plugin、^1.2.0、github:owner/repo#v1.0.0）。先看計畫，再決定裝不裝。',
+        installPlaceholder: '套件名或 spec',
+        installPlan: '檢查計畫',
+        installPlanning: '檢查中…',
+        installRun: '安裝',
+        installRunning: '安裝中…',
+        installCommand: '會跑的指令',
+        installToolDsh: 'dsh 啟動器',
+        installToolReady: '找得到',
+        installToolMissing: '找不到',
+        installToolNotProbed: '沒探測（與「不可用」不同）',
+        installFresh: '這顆目前不在 profile 裡——會是新增。',
+        installReplaces: '這會改寫已記錄的 spec：',
+        installSameSpec: 'profile 已經記著同一個 spec。重跑只會重新解析來源。',
+        installNoName: '這個 spec 看不出會裝成什麼名字，所以面板無法比對它會不會取代已裝的插件。',
+        installPipeline: '按下去會走完整管道：裝前驗證 → 快照 → 執行上面那行指令 → 再驗一次 → 失敗自動回滾。',
+        installGoal: '裝之前驗、裝之前影、裝之後再驗、爆咗自動回滾。',
+        installResultOk: '裝好了，而且裝後驗證通過。',
+        installResultFailed: '失敗了，而且已經自動回滾。',
+        installResultRollback: '回滾',
+        installResultRestored: '已還原',
+        installResultFresh: '沒有東西要還原',
+        installResultRestart: '重啟 dsh web 之後才會載入。',
+        installResultSpec: 'profile 現在記著',
+        installRefused: '這個 spec 不被接受：',
+        installByHand: '要裝它的話，用官方 CLI 自己貼：',
+      
         at: '讀取時間',
         profile: 'profile',
         manifest: 'manifest',
@@ -295,6 +323,34 @@ window.__ModuleLoader__.load({
         updateCopy: 'Copy command',
         updateInstallOpen: 'How to install',
         updateInstallManual: 'This panel will not install it for you: paste the command into a terminal and read it before running it.',
+      
+        installTitle: 'Install a plugin',
+        installHint: 'A package name or spec (for example some-plugin, ^1.2.0, github:owner/repo#v1.0.0). See the plan first, then decide.',
+        installPlaceholder: 'package name or spec',
+        installPlan: 'Check the plan',
+        installPlanning: 'Checking…',
+        installRun: 'Install',
+        installRunning: 'Installing…',
+        installCommand: 'The command this would run',
+        installToolDsh: 'dsh launcher',
+        installToolReady: 'found',
+        installToolMissing: 'not found',
+        installToolNotProbed: 'not probed (which is not the same as unavailable)',
+        installFresh: 'This plugin is not in the profile yet — this would be an addition.',
+        installReplaces: 'This REPLACES the recorded spec:',
+        installSameSpec: 'The profile already records this exact spec. Re-running only re-resolves the source.',
+        installNoName: 'This spec does not reveal the name it installs as, so the panel cannot tell whether it replaces an installed plugin.',
+        installPipeline: 'Running it goes through the whole pipeline: verify → snapshot → the command above → verify again → automatic rollback on failure.',
+        installGoal: 'Verified before, snapshotted before, verified after, rolled back automatically when it breaks.',
+        installResultOk: 'Installed, and the post-install verification passed.',
+        installResultFailed: 'It failed, and the profile was rolled back automatically.',
+        installResultRollback: 'Rollback',
+        installResultRestored: 'restored',
+        installResultFresh: 'there was nothing to restore',
+        installResultRestart: 'It loads after dsh web is restarted.',
+        installResultSpec: 'The profile now records',
+        installRefused: 'That spec is not accepted:',
+        installByHand: 'To install it anyway, paste this into a terminal yourself:',
       
         at: 'read at',
         profile: 'profile',
@@ -588,6 +644,25 @@ window.__ModuleLoader__.load({
       .pm-upd-step-bad{color:var(--dsw-alias-state-error-primary,#cf222e)}
       .pm-upd-step .pm-upd-note{margin-left:6px}
       
+      /* ── the install field ────────────────────────────────────────────────────
+         Deliberately not a card: it is a small, always-present affordance above the
+         list, and giving it the same weight as the plugin cards would make the panel
+         read as two lists. The plan block below it is where the weight goes, because
+         that is the part the user has to read before pressing anything. */
+      .pm-install{display:flex;flex-direction:column;gap:6px;padding:9px 10px;border:1px dashed var(--dsw-alias-border-l1,#d8dee4);border-radius:9px}
+      .pm-install-title{font-weight:600;font-size:12px}
+      .pm-install-lead{font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
+      .pm-install-row{display:flex;align-items:center;gap:6px}
+      .pm-install-plan{display:flex;flex-direction:column;gap:5px;padding:7px 9px;border-radius:6px;background:var(--dsw-alias-bg-layer-2,#f6f8fa)}
+      /* The command is the thing being reviewed, so it is selectable as a whole: a
+         partial copy of a command is a command that does something else. */
+      .pm-code{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;padding:4px 6px;border:1px solid var(--dsw-alias-border-l1,#d8dee4);border-radius:5px;background:var(--dsw-alias-bg-base,#ffffff);user-select:all}
+      .pm-install-meta,.pm-install-note{font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
+      .pm-install-notes{margin:0;padding-left:16px;font-size:11px;color:var(--dsw-alias-label-secondary,#656d76);display:flex;flex-direction:column;gap:2px}
+      .pm-install-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+      .pm-install-goal{font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
+      .pm-btn-run{border-color:var(--dsw-alias-brand-primary,#0969da);color:var(--dsw-alias-brand-primary,#0969da);font-weight:600}
+      
       /* The way out of a refusal. It is the ONE place the update panel offers
          something to DO about a missing tool, so it is set apart from the notes
          around it rather than looking like one more line of explanation. */
@@ -803,6 +878,24 @@ window.__ModuleLoader__.load({
            */
           plan: (name, ref) =>
             read('plan', `name=${encodeURIComponent(String(name))}${ref === null || ref === undefined || ref === '' ? '' : `&ref=${encodeURIComponent(String(ref))}`}`),
+          /**
+           * Ask what INSTALLING a spec would do, without doing it.
+           *
+           * The same route as `plan`, reached with a verb. Kept as its own method
+           * rather than an options bag on `plan`, because the two are called from
+           * different places with different data — a card plans an update for a name it
+           * already has; the install field plans a spec that has no name yet.
+           * @param {string} spec - the package name or spec the user typed.
+           * @returns {Promise<object>} the plan, including the refusal reason when the
+           *   spec is not acceptable.
+           */
+          planInstall: (spec) => read('plan', `verb=add&spec=${encodeURIComponent(String(spec))}`),
+          /**
+           * Ask what REMOVING one plugin would do, without doing it.
+           * @param {string} name - the package name.
+           * @returns {Promise<object>} the plan.
+           */
+          planRemove: (name) => read('plan', `verb=remove&name=${encodeURIComponent(String(name))}`),
           /**
            * Run one update through the pipeline.
            *
@@ -1862,6 +1955,163 @@ window.__ModuleLoader__.load({
         }
       
         /**
+         * The install field: type a spec, see the plan, then decide.
+         *
+         * ## Why this is two deliberate steps and not one button
+         *
+         * Every other manager in this ecosystem puts a text field and an Install
+         * button next to each other, and the button becomes a leap of faith. The
+         * package's one claim is that the answer arrives BEFORE anything is touched, so
+         * the field cannot be allowed to violate it: typing produces nothing, "check
+         * the plan" produces the plan, and only a plan that came back runnable offers
+         * the button at all.
+         *
+         * ## The three states of the plan are rendered differently on purpose
+         *
+         * "not in the profile" (a fresh install), "replaces the recorded spec" and
+         * "already this exact spec" are different situations with different
+         * consequences, and a UI that collapsed them into "ok" would be hiding the one
+         * thing the user needs. Likewise `tools.dsh` carries three values: found, not
+         * found, and `null` meaning NOT PROBED — which is not the same as unavailable
+         * and must never be shown as it.
+         */
+        function InstallField(props) {
+          const t = props.t
+          const plan = props.plan
+          const busy = props.busy === true
+          const inspecting = plan !== null && plan !== undefined && plan.phase === 'checking'
+          const refusing = plan !== null && plan !== undefined && plan.phase === 'ready' && plan.data.ok !== true
+          const runnable = plan !== null && plan !== undefined && plan.phase === 'ready' && plan.data.ok === true && plan.data.runnable === true
+          const data = plan !== null && plan !== undefined && plan.phase === 'ready' ? plan.data : null
+      
+          const lines = []
+          if (data !== null) {
+            lines.push(data.summary)
+            lines.push(
+              data.alreadyInstalled !== true
+                ? t('installFresh')
+                : data.sameSpec === true
+                  ? t('installSameSpec')
+                  : `${t('installReplaces')} ${String(data.current ?? t('none'))}`,
+            )
+            if (data.name === null || data.name === undefined) lines.push(t('installNoName'))
+            for (const warning of data.warnings ?? []) lines.push(warning)
+          }
+      
+          const tool = data === null ? null : data.tools === null || data.tools === undefined ? null : data.tools.dsh
+          const toolText =
+            tool === null || tool === undefined
+              ? t('installToolNotProbed')
+              : tool.available === true
+                ? t('installToolReady')
+                : t('installToolMissing')
+      
+          return h(
+            'div',
+            { className: 'pm-install' },
+            h('div', { className: 'pm-install-title' }, t('installTitle')),
+            h('div', { className: 'pm-install-lead' }, t('installHint')),
+            h(
+              'div',
+              { className: 'pm-install-row' },
+              h('input', {
+                id: 'pm-install-spec',
+                type: 'text',
+                className: 'pm-input',
+                placeholder: t('installPlaceholder'),
+                value: props.spec,
+                disabled: busy,
+                onChange: (event) => props.onSpec(event.target && typeof event.target.value === 'string' ? event.target.value : ''),
+                onKeyDown: (event) => {
+                  if (event.key === 'Enter') props.onPlan()
+                },
+              }),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'pm-btn',
+                  disabled: busy || inspecting || props.spec.trim().length === 0,
+                  onClick: () => props.onPlan(),
+                },
+                inspecting ? t('installPlanning') : t('installPlan'),
+              ),
+            ),
+      
+            // A refusal is an ANSWER, not a blank: the reason is the whole product.
+            refusing
+              ? h(Notice, {
+                  bad: true,
+                  title: t('installRefused'),
+                  body: h(
+                    'div',
+                    null,
+                    h('div', null, String(data.error ?? '')),
+                    h('div', { className: 'pm-install-steps' }, t('installByHand')),
+                    h('code', { className: 'pm-code' }, `dsh plugin --profile <profile> add ${props.spec}`),
+                  ),
+                })
+              : null,
+      
+            data === null || data.ok !== true
+              ? null
+              : h(
+                  'div',
+                  { className: 'pm-install-plan' },
+                  h('div', { className: 'pm-install-steps' }, t('installCommand')),
+                  h('code', { className: 'pm-code pm-break' }, (data.displayArgv ?? data.argv ?? []).join(' ')),
+                  h(
+                    'div',
+                    { className: 'pm-install-meta' },
+                    `${t('installToolDsh')}：${toolText}`,
+                    data.runnable === true ? null : ` · ${String(data.runError ?? '')}`,
+                  ),
+                  h('ul', { className: 'pm-install-notes' }, lines.filter((line) => typeof line === 'string').map((line, index) => h('li', { key: `plan-${String(index)}` }, line))),
+                  h('div', { className: 'pm-install-note' }, t('installPipeline')),
+                  runnable
+                    ? h(
+                        'div',
+                        { className: 'pm-install-actions' },
+                        h('button', { type: 'button', className: 'pm-btn pm-btn-run', disabled: busy, onClick: () => props.onRun() }, busy ? t('installRunning') : t('installRun')),
+                        h('span', { className: 'pm-install-goal' }, t('installGoal')),
+                      )
+                    : null,
+                ),
+      
+            // The run outcome. Success and the restart are stated in the same breath,
+            // for the same reason the toggle notice pairs them: "installed" that has
+            // not loaded yet is not the same as "working".
+            props.result === null || props.result === undefined
+              ? null
+              : props.result.ok === true
+                ? h(Notice, {
+                    title: t('installResultOk'),
+                    body: h(
+                      'div',
+                      null,
+                      h('div', null, `${t('installResultSpec')}：${String(props.result.recordedSpec ?? t('none'))}`),
+                      h('div', null, t('installResultRestart')),
+                    ),
+                  })
+                : h(Notice, {
+                    bad: true,
+                    title: t('installResultFailed'),
+                    body: h(
+                      'div',
+                      null,
+                      h('div', null, String(props.result.error ?? '')),
+                      h(
+                        'div',
+                        null,
+                        `${t('installResultRollback')}：${props.result.rollback !== null && props.result.rollback !== undefined && props.result.rollback.ok === true ? t('installResultRestored') : t('installResultFresh')}`,
+                      ),
+                      (props.result.residue ?? []).length === 0 ? null : h('ul', { className: 'pm-install-notes' }, props.result.residue.map((item, index) => h('li', { key: `residue-${String(index)}` }, String(item)))),
+                    ),
+                  }),
+          )
+        }
+      
+        /**
          * Attached for tests. `PluginCard` and its two rules cannot be observed from
          * the descriptor tree: `h(PluginCard, …)` is a component descriptor and the
          * test stub deliberately never invokes components, so the class name, the
@@ -1877,6 +2127,7 @@ window.__ModuleLoader__.load({
         Panel.__cardClassOf = cardClassOf
         Panel.__stateKeyOf = stateKeyOf
         Panel.__PluginCard = PluginCard
+        Panel.__InstallField = InstallField
         Panel.__update = { UpdateTrigger, UpdatePanel, useUpdate }
       
         return Panel
@@ -1893,6 +2144,22 @@ window.__ModuleLoader__.load({
           // that card shows "working", and `outcome` holds the last write result.
           const [writing, setWriting] = useState(null)
           const [outcome, setOutcome] = useState(null)
+          // The install field. Its own state rather than a flag on `outcome`, because
+          // a plan, a refusal and a run result are three different things that happen
+          // at three different moments — collapsing them would make "the plan is
+          // stale" unrepresentable, and a stale plan is a plan for the wrong spec.
+          const [spec, setSpec] = useState('')
+          const [planState, setPlanState] = useState(null)
+          const [installResult, setInstallResult] = useState(null)
+          const [installing, setInstalling] = useState(false)
+      
+          // A plan describes ONE spec. Editing the field invalidates it, and leaving it
+          // on screen would show a command for something the user is no longer asking
+          // about — which is worse than showing nothing.
+          useEffect(() => {
+            setPlanState((current) => (current !== null && current !== undefined && current.spec !== spec ? null : current))
+            setInstallResult((current) => (current !== null && current !== undefined && current.spec !== spec ? null : current))
+          }, [spec])
       
           /**
            * Set one plugin's enabled state.
@@ -1920,6 +2187,66 @@ window.__ModuleLoader__.load({
               .catch((error) => {
                 setWriting(null)
                 setOutcome({ ok: false, id, error: error && error.message ? error.message : String(error), restartRequired: false })
+              })
+          }
+      
+          /**
+           * Ask the host what installing the typed spec would do. Nothing is written.
+           *
+           * The refusal path matters as much as the success path: an unacceptable spec
+           * comes back as `ok: false` WITH a reason, and that reason is displayed
+           * verbatim. A field that silently does nothing when you press the button is
+           * the failure this whole flow exists to avoid.
+           */
+          function runPlan() {
+            const wanted = spec.trim()
+            if (wanted.length === 0) return
+            if (props.face === null || props.face === undefined || typeof props.face.planInstall !== 'function') {
+              setPlanState({ phase: 'ready', spec: wanted, data: { ok: false, error: t('noHost') } })
+              return
+            }
+            setPlanState({ phase: 'checking', spec: wanted, data: null })
+            setInstallResult(null)
+            props.face
+              .planInstall(wanted)
+              .then((result) => setPlanState({ phase: 'ready', spec: wanted, data: result }))
+              .catch((error) => setPlanState({ phase: 'ready', spec: wanted, data: { ok: false, error: error && error.message ? error.message : String(error) } }))
+          }
+      
+          /**
+           * Run the planned install through the pipeline.
+           *
+           * The PLAN is sent, not the field: the spec the user reviewed is the spec that
+           * runs, even if they kept typing afterwards. On success the panel reloads,
+           * because what is listed must come from the host rather than from an
+           * assumption about what the CLI did.
+           */
+          function runInstall() {
+            const planned = planState === null || planState === undefined || planState.data === null ? null : planState.data
+            if (planned === null || planned.ok !== true) return
+            if (props.face === null || props.face === undefined || typeof props.face.apply !== 'function') {
+              setInstallResult({ ok: false, spec: planned.spec, error: t('noHost') })
+              return
+            }
+            setInstalling(true)
+            setInstallResult(null)
+            props.face
+              .apply(planned.name ?? null, null, { verb: 'add', spec: planned.spec })
+              .then((result) => {
+                setInstalling(false)
+                setInstallResult({ ...result, spec: planned.spec })
+                if (result !== null && result !== undefined && result.ok === true) {
+                  setTick((n) => n + 1)
+                  // The plan described the profile as it was BEFORE this install, so it
+                  // is now out of date by definition. The run result below carries what
+                  // the user needs next.
+                  setPlanState(null)
+                  setSpec('')
+                }
+              })
+              .catch((error) => {
+                setInstalling(false)
+                setInstallResult({ ok: false, spec: planned.spec, error: error && error.message ? error.message : String(error) })
               })
           }
       
@@ -2032,6 +2359,27 @@ window.__ModuleLoader__.load({
             { className: 'pm-head' },
             h('div', { className: 'pm-h1' }, h('h3', { className: 'pm-title' }, t('tab')), h('span', { className: 'pm-count' }, String(plugins.length))),
           )
+      
+          // ── the install field ───────────────────────────────────────────────────
+          // Offered only where a change has somewhere to go: with an unreadable
+          // manifest the host cannot tell what is installed, so it cannot say whether
+          // a spec is new or a replacement — and that answer is the point of the plan.
+          const installField =
+            unresolved || absent
+              ? null
+              : h(InstallField, {
+                  t,
+                  spec,
+                  // Held busy while the list is still loading, so the field cannot be
+                  // used against a profile the panel has not read yet: the plan's whole
+                  // value is comparing the spec against what IS installed.
+                  busy: installing || state.phase !== 'ready',
+                  plan: planState,
+                  result: installResult,
+                  onSpec: setSpec,
+                  onPlan: runPlan,
+                  onRun: runInstall,
+                })
       
           // ── section 1: the plugins ──────────────────────────────────────────────
           // The input carries a real <label>, not just a placeholder: a placeholder
@@ -2237,6 +2585,7 @@ window.__ModuleLoader__.load({
                       body: String(outcome.error ?? ''),
                     }),
               unresolved ? null : controls,
+              installField,
               inventory,
             ),
       

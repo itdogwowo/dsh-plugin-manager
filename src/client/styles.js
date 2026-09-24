@@ -244,6 +244,25 @@ export const CSS = `
 .pm-upd-step-bad{color:var(--dsw-alias-state-error-primary,#cf222e)}
 .pm-upd-step .pm-upd-note{margin-left:6px}
 
+/* ── the install field ────────────────────────────────────────────────────
+   Deliberately not a card: it is a small, always-present affordance above the
+   list, and giving it the same weight as the plugin cards would make the panel
+   read as two lists. The plan block below it is where the weight goes, because
+   that is the part the user has to read before pressing anything. */
+.pm-install{display:flex;flex-direction:column;gap:6px;padding:9px 10px;border:1px dashed var(--dsw-alias-border-l1,#d8dee4);border-radius:9px}
+.pm-install-title{font-weight:600;font-size:12px}
+.pm-install-lead{font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
+.pm-install-row{display:flex;align-items:center;gap:6px}
+.pm-install-plan{display:flex;flex-direction:column;gap:5px;padding:7px 9px;border-radius:6px;background:var(--dsw-alias-bg-layer-2,#f6f8fa)}
+/* The command is the thing being reviewed, so it is selectable as a whole: a
+   partial copy of a command is a command that does something else. */
+.pm-code{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;padding:4px 6px;border:1px solid var(--dsw-alias-border-l1,#d8dee4);border-radius:5px;background:var(--dsw-alias-bg-base,#ffffff);user-select:all}
+.pm-install-meta,.pm-install-note{font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
+.pm-install-notes{margin:0;padding-left:16px;font-size:11px;color:var(--dsw-alias-label-secondary,#656d76);display:flex;flex-direction:column;gap:2px}
+.pm-install-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pm-install-goal{font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
+.pm-btn-run{border-color:var(--dsw-alias-brand-primary,#0969da);color:var(--dsw-alias-brand-primary,#0969da);font-weight:600}
+
 /* The way out of a refusal. It is the ONE place the update panel offers
    something to DO about a missing tool, so it is set apart from the notes
    around it rather than looking like one more line of explanation. */

@@ -39,7 +39,17 @@ import { probeDshLauncher, probeGit } from './host.js'
 import { readLocalRefs, parseRemoteUrl } from './gitrefs.js'
 import { fetchRemoteRefs } from './gitremote.js'
 import { toolInstallHint } from './install-hints.mjs'
-import { classifyUpdate, materialiseArgv, planUpdate, pluginCommand, rollbackLast, runPipeline } from './pipeline.js'
+import {
+  checkPackageSpec,
+  classifyUpdate,
+  materialiseArgv,
+  planInstall,
+  planRemoval,
+  planUpdate,
+  pluginCommand,
+  rollbackLast,
+  runPipeline,
+} from './pipeline.js'
 
 /** Path prefix; must equal `prefix` in `src/endpoints.json`. */
 export const PREFIX = '/api/dsh-plugin-manager'
@@ -425,11 +435,17 @@ async function readOsRelease(fs) {
 }
 
 /**
- * `plan` — what an update would do, without doing it.
+ * `plan` — what a change would do, without doing it.
  *
  * This is the shape the whole package is built around: the answer arrives
  * BEFORE anything is touched, and it arrives even when the answer is "this
  * cannot be done, and here is why".
+ *
+ * ⚠️ **All three verbs are planned through this one route**, and the reason is
+ * not symmetry for its own sake. `update` was the only verb with a plan, so
+ * `add` — the verb a user reaches for most — went straight from a text field to
+ * a subprocess. Routing it through here is what makes the package's central
+ * promise true of installing as well as of updating.
  *
  * @param {(name: string) => unknown} get - optional-service reader.
  * @returns {(req: object, res: object) => Promise<void>} the handler.
@@ -440,39 +456,86 @@ function planHandler(get) {
       const query = typeof req.url === 'string' ? req.url : ''
       const name = nameFromQuery(query)
       const ref = parameterFromQuery(query, 'ref')
-      if (name === null) {
-        sendJson(res, 200, { ok: false, error: 'a name is required: ?name=<package>' })
+      const spec = parameterFromQuery(query, 'spec')
+      const requested = parameterFromQuery(query, 'verb')
+      // Unknown verbs fall back to `update`, the verb this route had first, so a
+      // typo can never silently become a plan for something else.
+      const verb = requested === 'remove' ? 'remove' : requested === 'add' ? 'add' : 'update'
+
+      if (verb === 'add' && spec === null) {
+        sendJson(res, 200, { ok: false, verb, error: 'a spec is required to plan an install: ?verb=add&spec=<spec>' })
         return
+      }
+      if (verb !== 'add' && name === null) {
+        sendJson(res, 200, { ok: false, verb, error: 'a name is required: ?name=<package>' })
+        return
+      }
+
+      // The spec gate runs BEFORE the profile is read, and the order is the
+      // point: whether a spec is acceptable has the same answer no matter what
+      // the profile says, and a user whose spec is malformed should be told that,
+      // not told about an unrelated failure to read a manifest.
+      if (verb === 'add') {
+        const checked = checkPackageSpec(spec)
+        if (checked.ok !== true) {
+          sendJson(res, 200, { ok: false, verb, error: checked.error })
+          return
+        }
       }
 
       const context = await resolveChangeContext(get)
       if (context.error !== null) {
-        sendJson(res, 200, { ok: false, error: context.error })
+        sendJson(res, 200, { ok: false, verb, error: context.error })
         return
       }
 
-      // Classify FIRST, then probe only the tool the plan needs. A registry
-      // plugin never pays for a `git --version`, and a checkout never pays for a
-      // search of the dsh launcher (R4: no work that was not asked for).
-      const classified = await classifyUpdate({ fs: context.fs, inventory: context.inventory, name, ref })
-      const probes = await probeFor(context, classified.needs ?? [])
+      // `add` and `remove` always go through the CLI, so their tool need is known
+      // without classifying anything; only `update` has to look at what the
+      // plugin IS before it can say which tool it needs. Deciding this FIRST is
+      // what keeps the probe honest: a registry install never pays for a
+      // `git --version` (R4: no work that was not asked for).
+      let needs = ['dsh']
+      let classified = null
+      if (verb === 'update') {
+        classified = await classifyUpdate({ fs: context.fs, inventory: context.inventory, name, ref })
+        needs = classified.needs ?? []
+      }
+      const probes = await probeFor(context, needs)
 
-      const plan = await planUpdate({
-        fs: context.fs,
-        subprocess: context.subprocess,
-        launcher: probes.launcher,
-        git: probes.git,
-        inventory: context.inventory,
-        name,
-        ref,
-        profileName: context.profileName,
-      })
+      const plan =
+        verb === 'remove'
+          ? await planRemoval({
+              fs: context.fs,
+              inventory: context.inventory,
+              launcher: probes.launcher,
+              name,
+              profileName: context.profileName,
+              selfName: SELF_NAME,
+            })
+          : verb === 'add'
+            ? await planInstall({
+                fs: context.fs,
+                inventory: context.inventory,
+                launcher: probes.launcher,
+                spec,
+                profileName: context.profileName,
+              })
+            : await planUpdate({
+                fs: context.fs,
+                subprocess: context.subprocess,
+                launcher: probes.launcher,
+                git: probes.git,
+                inventory: context.inventory,
+                name,
+                ref,
+                profileName: context.profileName,
+              })
 
       const materialised = materialiseArgv({ git: probes.git, launcher: probes.launcher }, plan.argv)
       // Only when a MISSING tool is what stands in the way: a hint on a plan
       // that can already run is noise, and one shown for "git refused this
       // command" would suggest installing what is already installed.
-      const gitMissing = probes.git !== null && probes.git.available !== true && (classified.needs ?? []).includes('git')
+      const gitMissing = probes.git !== null && probes.git.available !== true && needs.includes('git')
       const installHint = gitMissing
         ? toolInstallHint('git', {
             platform: typeof process !== 'undefined' ? process.platform : null,
@@ -481,10 +544,11 @@ function planHandler(get) {
         : null
       sendJson(res, 200, {
         ...plan,
+        verb,
         runnable: materialised.ok === true,
         runError: materialised.ok === true ? null : materialised.error,
         displayArgv: plan.argv,
-        needs: classified.needs ?? [],
+        needs,
         installHint,
         tools: {
           // `null` means "not probed", which is different from "not available"
@@ -498,7 +562,10 @@ function planHandler(get) {
               ? null
               : { available: probes.launcher.available, path: probes.launcher.path, error: probes.launcher.error },
         },
-        verification: 'the plan itself changes nothing; pressing update runs verify → snapshot → the command above → verify again, and rolls back on failure',
+        verification:
+          verb === 'update'
+            ? 'the plan itself changes nothing; pressing update runs verify → snapshot → the command above → verify again, and rolls back on failure'
+            : 'the plan itself changes nothing; running it goes through verify → snapshot → the command above → verify again, and rolls back on failure',
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -550,6 +617,21 @@ function applyHandler(get) {
         return
       }
 
+      // The gate is applied HERE as well as in `plan`, not instead of it. The
+      // panel is expected to plan first, but `apply` is reachable on its own —
+      // and a rule that only holds on the path a well-behaved client takes is not
+      // a rule. One verification, two enforcement points. It also runs before the
+      // profile is read, so a malformed spec is answered as a malformed spec.
+      let installSpec = null
+      if (verb === 'add') {
+        const checked = checkPackageSpec(spec ?? name)
+        if (checked.ok !== true) {
+          sendJson(res, 400, { ok: false, verb, error: checked.error })
+          return
+        }
+        installSpec = checked.spec
+      }
+
       const context = await resolveChangeContext(get)
       if (context.error !== null) {
         sendJson(res, 200, { ok: false, error: context.error })
@@ -568,8 +650,8 @@ function applyHandler(get) {
       const probes = await probeFor(context, needs)
 
       if (verb === 'add') {
-        argv = pluginCommand(context.profileName, 'add', spec ?? name)
-        label = `add ${spec ?? name}`
+        argv = pluginCommand(context.profileName, 'add', installSpec)
+        label = `add ${String(installSpec)}`
       } else if (verb === 'remove') {
         argv = pluginCommand(context.profileName, 'remove', name)
         label = `remove ${name}`

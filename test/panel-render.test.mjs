@@ -212,6 +212,7 @@ async function renderPanel(payload, options = {}) {
   renderPanel.__cardClassOf = entry.component.__cardClassOf
   renderPanel.__stateKeyOf = entry.component.__stateKeyOf
   renderPanel.__PluginCard = entry.component.__PluginCard
+  renderPanel.__InstallField = entry.component.__InstallField
   renderPanel.__update = entry.component.__update
   // The stub itself, so a test can drive a card's own hooks (see the update
   // trigger case): a card's state is not reachable from the tree it returns.
@@ -1222,6 +1223,213 @@ test('panel: the search box filters the rendered cards', async () => {
   assert.ok(empty !== undefined, 'a miss must render the empty state')
   assert.equal(empty.props.title, 'T:emptySearchTitle', 'the empty state must use the search-specific copy')
   assert.ok(empty.props.action !== null && empty.props.action !== undefined, 'the empty state must offer a way back')
+})
+
+/* ── the install field ──────────────────────────────────────────────────────
+   The field is the first thing in this panel that can ADD a plugin, and the
+   whole claim of the package is that nothing runs that was not shown first. That
+   claim lives in the RENDER: the Install button must not exist until a plan came
+   back runnable, and a refusal must render its reason rather than an empty box.
+
+   `InstallField` is a plain function with no hooks, so these tests call it
+   directly with the props the Panel would pass — the same technique the card
+   rules use, and for the same reason: a component descriptor is never invoked by
+   the stub, so anything inside it is invisible to a tree walk. */
+
+/** Render the install field with one plan state. */
+async function renderInstall(plan, result = null, spec = 'some-plugin') {
+  const tree = await renderPanel({ ...overview(), backend: backend() }, { renders: 1 })
+  const InstallField = renderPanel.__InstallField
+  assert.equal(typeof InstallField, 'function', 'the panel must expose the install field to tests')
+  return InstallField({
+    t: (key) => `T:${key}`,
+    spec,
+    busy: false,
+    plan,
+    result,
+    onSpec: () => {},
+    onPlan: () => {},
+    onRun: () => {},
+  })
+}
+
+/** The Install button, or undefined when it was not rendered. */
+function findInstallButton(tree) {
+  return findByClass(tree, 'pm-btn-run')[0]
+}
+
+/**
+ * Every string reachable from a descriptor tree, including inside COMPONENT
+ * descriptors.
+ *
+ * ⚠️ This exists because `findByClass` cannot see through a component: `h(Notice,
+ * { body: … })` is a descriptor, the stub never invokes it, so the markup Notice
+ * would produce is absent from the tree. Asserting on the PROPS is not a weaker
+ * test here — it is the only available one, and it still fails if the panel stops
+ * handing Notice the refusal reason.
+ */
+function textOf(node, out = []) {
+  if (node === null || node === undefined || typeof node === 'boolean') return out
+  if (Array.isArray(node)) {
+    for (const child of node) textOf(child, out)
+    return out
+  }
+  if (typeof node !== 'object') {
+    out.push(String(node))
+    return out
+  }
+  // A descriptor's `props` is a plain DATA object, not another descriptor, so it
+  // has to be walked value by value. Recursing into `node.props` as though it
+  // were a node reads `props.props` and `props.children`, finds neither, and
+  // returns nothing — which is how the first version of this helper reported an
+  // empty string for a Notice that plainly held the refusal text.
+  for (const value of Object.values(node.props ?? {})) textOf(value, out)
+  textOf(node.children, out)
+  return out
+}
+
+test('install field: with no plan there is no command and no Install button', async () => {
+  const tree = await renderInstall(null)
+  // `pm-install-row` and not `pm-install`: the class match is a substring, so
+  // `pm-install` also hits `pm-install-title`, `pm-install-lead` and so on.
+  assert.equal(findByClass(tree, 'pm-install-row').length, 1, 'the field itself must render')
+  assert.equal(findByClass(tree, 'pm-code').length, 0, 'nothing may be shown before a plan exists')
+  assert.equal(findInstallButton(tree), undefined, 'the button must not exist before a plan exists')
+})
+
+test('install field: a runnable plan shows the exact command and offers the button', async () => {
+  const tree = await renderInstall({
+    phase: 'ready',
+    spec: 'some-plugin',
+    data: {
+      ok: true,
+      runnable: true,
+      runError: null,
+      spec: 'some-plugin',
+      name: 'some-plugin',
+      summary: 'install some-plugin',
+      alreadyInstalled: false,
+      sameSpec: false,
+      warnings: [],
+      argv: ['dsh', 'plugin', '--profile', 'web', 'add', 'some-plugin'],
+      displayArgv: ['dsh', 'plugin', '--profile', 'web', 'add', 'some-plugin'],
+      tools: { git: null, dsh: { available: true, path: '/launcher' } },
+    },
+  })
+
+  const code = findByClass(tree, 'pm-code')
+  assert.equal(code.length, 1, 'the command must be rendered')
+  // The display must be the ARGV the host would materialise, joined — not a
+  // summary sentence. A user agreeing to "install some-plugin" has not agreed to
+  // the command that will actually run.
+  assert.equal(code[0].children.join(''), 'dsh plugin --profile web add some-plugin')
+  assert.ok(findInstallButton(tree) !== undefined, 'a runnable plan must offer the button')
+})
+
+test('install field: a refusal renders the reason instead of a button', async () => {
+  const tree = await renderInstall(
+    {
+      phase: 'ready',
+      spec: '--global',
+      data: { ok: false, runnable: false, runError: null, spec: null, argv: [], displayArgv: [], tools: { dsh: { available: true } }, error: 'that starts with a hyphen' },
+    },
+    null,
+    '--global',
+  )
+
+  assert.equal(findInstallButton(tree), undefined, 'a refused plan must not offer a way to run it')
+
+  const notice = findByClass(tree, 'Notice')[0]
+  assert.ok(notice !== undefined, 'a refusal must be a Notice, not a blank box')
+  assert.equal(notice.props.bad, true, 'a refusal is not a neutral message')
+  const text = textOf(notice).join(' ')
+  assert.match(text, /that starts with a hyphen/, 'the refusal reason is the answer and must be rendered')
+  assert.match(text, /installByHand/, 'the refusal must offer the way out')
+  // The by-hand command is built from what the user TYPED, not from the plan —
+  // a refused spec has no plan spec to quote. A way out that does not name what
+  // the user typed is not a way out.
+  assert.match(text, /dsh plugin --profile <profile> add --global/)
+})
+
+test('install field: NOT PROBED and NOT AVAILABLE are rendered differently', async () => {
+  // The distinction is load-bearing everywhere else in this package (`tools.git:
+  // null` means "not asked"), so the install field has to honour it too: showing
+  // "not found" for a probe that never ran would send a user to install a tool
+  // that is already there.
+  const planBody = (dsh) => ({
+    ok: true,
+    runnable: true,
+    runError: null,
+    spec: 'some-plugin',
+    name: 'some-plugin',
+    summary: 'install some-plugin',
+    alreadyInstalled: false,
+    sameSpec: false,
+    warnings: [],
+    argv: ['dsh', 'plugin', '--profile', 'web', 'add', 'some-plugin'],
+    displayArgv: ['dsh', 'plugin', '--profile', 'web', 'add', 'some-plugin'],
+    tools: { git: null, dsh },
+  })
+
+  const notProbed = JSON.stringify(await renderInstall({ phase: 'ready', spec: 'some-plugin', data: planBody(null) }))
+  assert.match(notProbed, /installToolNotProbed/)
+
+  const missing = JSON.stringify(await renderInstall({ phase: 'ready', spec: 'some-plugin', data: planBody({ available: false, error: 'gone' }) }))
+  assert.match(missing, /installToolMissing/)
+
+  const found = JSON.stringify(await renderInstall({ phase: 'ready', spec: 'some-plugin', data: planBody({ available: true, path: '/x' }) }))
+  assert.match(found, /installToolReady/)
+})
+
+test('install field: an unknowable name is stated, not papered over', async () => {
+  const tree = await renderInstall({
+    phase: 'ready',
+    spec: '^1.2.0',
+    data: {
+      ok: true,
+      runnable: true,
+      runError: null,
+      spec: '^1.2.0',
+      name: null,
+      summary: 'install ^1.2.0',
+      alreadyInstalled: false,
+      sameSpec: false,
+      warnings: [],
+      argv: ['dsh', 'plugin', '--profile', 'web', 'add', '^1.2.0'],
+      displayArgv: ['dsh', 'plugin', '--profile', 'web', 'add', '^1.2.0'],
+      tools: { dsh: { available: true } },
+    },
+  })
+
+  // "cannot tell from the spec" must reach the screen: the panel must not let it
+  // read as "this is definitely new".
+  assert.match(JSON.stringify(tree), /installNoName/)
+})
+
+test('install field: a successful run states the restart in the same breath', async () => {
+  const tree = await renderInstall(
+    null,
+    { ok: true, spec: 'some-plugin', recordedSpec: 'some-plugin', rollback: null },
+    '',
+  )
+  const text = JSON.stringify(tree)
+  assert.match(text, /installResultOk/)
+  assert.match(text, /installResultRestart/, '"installed" must never be readable as "in effect"')
+  assert.match(text, /some-plugin/, 'the recorded spec must be shown, not assumed')
+})
+
+test('install field: a rolled-back run says so, and lists what was left behind', async () => {
+  const tree = await renderInstall(
+    null,
+    { ok: false, spec: 'some-plugin', error: 'the post-check failed', rollback: { ok: true }, residue: ['node_modules/some-plugin'] },
+    '',
+  )
+  const text = JSON.stringify(tree)
+  assert.match(text, /installResultFailed/)
+  assert.match(text, /installResultRestored/)
+  // Residue is reported, never silently swallowed: a rollback that could not undo
+  // everything must not be presented as a clean one.
+  assert.match(text, /node_modules\/some-plugin/)
 })
 
 

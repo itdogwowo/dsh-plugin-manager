@@ -149,6 +149,24 @@ export function createFace(doFetch, endpoints) {
     plan: (name, ref) =>
       read('plan', `name=${encodeURIComponent(String(name))}${ref === null || ref === undefined || ref === '' ? '' : `&ref=${encodeURIComponent(String(ref))}`}`),
     /**
+     * Ask what INSTALLING a spec would do, without doing it.
+     *
+     * The same route as `plan`, reached with a verb. Kept as its own method
+     * rather than an options bag on `plan`, because the two are called from
+     * different places with different data — a card plans an update for a name it
+     * already has; the install field plans a spec that has no name yet.
+     * @param {string} spec - the package name or spec the user typed.
+     * @returns {Promise<object>} the plan, including the refusal reason when the
+     *   spec is not acceptable.
+     */
+    planInstall: (spec) => read('plan', `verb=add&spec=${encodeURIComponent(String(spec))}`),
+    /**
+     * Ask what REMOVING one plugin would do, without doing it.
+     * @param {string} name - the package name.
+     * @returns {Promise<object>} the plan.
+     */
+    planRemove: (name) => read('plan', `verb=remove&name=${encodeURIComponent(String(name))}`),
+    /**
      * Run one update through the pipeline.
      *
      * Resolves with the host's run record — including `ok: false`, the failed
