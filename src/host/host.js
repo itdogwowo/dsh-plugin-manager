@@ -113,6 +113,90 @@ export function userHome() {
   return str(env.HOME) ?? str(env.USERPROFILE)
 }
 
+/**
+ * The git binary Sourcetree ships, as app-relative segments.
+ *
+ * ⚠️ Both spellings of the bundle name are candidates on purpose: the recipe in
+ * `dsh-Note/sync/skills/git-push` (which MEASURED it) writes `SourceTree.app`,
+ * while the bundle installed on the reference macOS machine is `Sourcetree.app`.
+ * Guessing one spelling would make this silently do nothing on one of them.
+ */
+export const SOURCETREE_GIT_IN_APP = ['Contents', 'Resources', 'git_local', 'bin', 'git']
+
+/** The Windows layout, which is NOT inside the app bundle. From the same skill. */
+export const SOURCETREE_GIT_WINDOWS = ['Atlassian', 'SourceTree', 'git_local', 'cmd', 'git.exe']
+
+/**
+ * Candidate paths for Sourcetree's OWN git, best first — the reason to reach for
+ * it rather than the git on PATH.
+ *
+ * Measured, and recorded in `dsh-Note/sync/skills/git-push`: running Sourcetree's
+ * bundled git by absolute path is what pushes successfully, because that binary
+ * resolves its credential helper from ITS OWN exec-path — where Sourcetree put
+ * `git-credential-osxkeychain`, the copy the OS keychain already trusts. The git
+ * on PATH runs a different copy and raises an authorization prompt instead.
+ *
+ * @param {string|null} home - the user's home, or null.
+ * @returns {string[]} absolute candidates, best first.
+ */
+export function sourcetreeGitCandidates(home) {
+  const out = []
+  const base = str(home)
+  if (base !== null) {
+    out.push(joinPath(base, 'Applications', 'SourceTree.app', ...SOURCETREE_GIT_IN_APP))
+    out.push(joinPath(base, 'Applications', 'Sourcetree.app', ...SOURCETREE_GIT_IN_APP))
+  }
+  out.push(joinPath('/Applications', 'SourceTree.app', ...SOURCETREE_GIT_IN_APP))
+  out.push(joinPath('/Applications', 'Sourcetree.app', ...SOURCETREE_GIT_IN_APP))
+  const env = typeof process !== 'undefined' && process.env ? process.env : {}
+  const local = str(env.LOCALAPPDATA)
+  if (local !== null) out.push(joinPath(local, ...SOURCETREE_GIT_WINDOWS))
+  const programFiles = str(env.ProgramFiles)
+  if (programFiles !== null) out.push(joinPath(programFiles, ...SOURCETREE_GIT_WINDOWS))
+  return out
+}
+
+/**
+ * The exec-path belonging to a Sourcetree git, or null.
+ *
+ * ⚠️ MEASURED, and the reason Sourcetree's git looked broken: run by absolute
+ * path it answers `git: 'remote-https' is not a git command` in 31 ms, because
+ * the bundle keeps its subcommands in `git_local/libexec/git-core` and that
+ * binary does not derive the location. With this set, the same binary works.
+ *
+ * @param {string|null} gitPath - a path like `…/git_local/bin/git`.
+ * @returns {string|null} the exec-path, or null when it cannot be derived.
+ */
+export function sourcetreeExecPathFor(gitPath) {
+  const path = str(gitPath)
+  if (path === null) return null
+  const bin = parentPath(path)
+  const local = parentPath(bin)
+  // `parentPath` returns its input when there is no parent to give, so an equal
+  // pair means "this path is too short to say" rather than "…/git_local".
+  if (local === bin || local === path) return null
+  return joinPath(local, 'libexec', 'git-core')
+}
+
+/**
+ * The first Sourcetree git that exists, or null.
+ *
+ * Null is the normal answer on a machine without Sourcetree, and the caller then
+ * falls back to whatever git it can resolve — the delegation still happens, git
+ * just uses the credential helper that machine configured.
+ */
+export async function findSourcetreeGit(fs, home) {
+  if (fs === undefined || fs === null || typeof fs.resolve !== 'function' || typeof fs.stat !== 'function') return null
+  for (const candidate of sourcetreeGitCandidates(home)) {
+    try {
+      if ((await fs.stat(await fs.resolve(candidate))) !== undefined) return candidate
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return null
+}
+
 /** Absolute candidate paths for Sourcetree's credential helpers, best first. */
 export function sourcetreeHelperCandidates(home) {
   const roots = []

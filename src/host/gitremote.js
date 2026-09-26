@@ -294,7 +294,9 @@ export async function listRemoteRefs(subprocess, input) {
     argv,
     cwd: '.',
     timeoutMs: REMOTE_TIMEOUT_MS + 10000,
-    env: { GIT_TERMINAL_PROMPT: '0' },
+    // `GIT_EXEC_PATH` only when a caller derived one (Sourcetree's bundle needs
+    // it); otherwise git's own resolution is left alone.
+    env: { GIT_TERMINAL_PROMPT: '0', ...(typeof input?.execPath === 'string' && input.execPath.length > 0 ? { GIT_EXEC_PATH: input.execPath } : {}) },
   })
   if (!result.ok) {
     const detail = firstLine(result.stderr) ?? result.error ?? `it exited ${String(result.exitCode)}`

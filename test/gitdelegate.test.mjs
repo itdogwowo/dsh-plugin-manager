@@ -25,7 +25,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { createRealSubprocess } from './helpers/real-subprocess.mjs'
-import { credentialHelperArgs, findSourcetreeHelper, joinPath, sourcetreeHelperCandidates, userHome } from '../src/host/host.js'
+import { credentialHelperArgs, findSourcetreeGit, findSourcetreeHelper, joinPath, sourcetreeGitCandidates, sourcetreeHelperCandidates, userHome } from '../src/host/host.js'
 import { listRemoteRefs, parseLsRemote } from '../src/host/gitremote.js'
 
 const FAKE_HOME = join(tmpdir(), 'dsh-pm-fake-home')
@@ -70,6 +70,37 @@ test('gitdelegate: the helper candidates point at the Sourcetree bundle, home fi
     '/Applications/Sourcetree.app/Contents/Resources/bin/git-credential-sourcetree',
     '/Applications/Sourcetree.app/Contents/Resources/git_local/bin/git-credential-osxkeychain',
   ])
+})
+
+test('gitdelegate: the Sourcetree git binary is preferred, in both bundle spellings', () => {
+  // The recipe measured in dsh-Note/sync/skills/git-push: running Sourcetree's
+  // bundled git by absolute path is what pushes without a prompt, because that
+  // binary resolves its credential helper from its own exec-path. The skill says
+  // `SourceTree.app`; the bundle on this machine is `Sourcetree.app` — so both are
+  // candidates, and a test pins that rather than trusting either memory.
+  const home = joinPath(tmpdir(), 'dsh-pm-home2')
+  const candidates = sourcetreeGitCandidates(home)
+  assert.ok(candidates.includes(joinPath(home, 'Applications', 'SourceTree.app', 'Contents', 'Resources', 'git_local', 'bin', 'git')))
+  assert.ok(candidates.includes(joinPath(home, 'Applications', 'Sourcetree.app', 'Contents', 'Resources', 'git_local', 'bin', 'git')))
+  assert.ok(candidates.includes(joinPath('/Applications', 'Sourcetree.app', 'Contents', 'Resources', 'git_local', 'bin', 'git')))
+  // The Windows layout is not inside the bundle; it hangs off the environment.
+  if (process.env.LOCALAPPDATA !== undefined) {
+    assert.ok(candidates.some((path) => path.endsWith(join('Atlassian', 'SourceTree', 'git_local', 'cmd', 'git.exe'))))
+  }
+})
+
+test('gitdelegate: finding the Sourcetree git answers null when it is not there', async () => {
+  const wanted = sourcetreeGitCandidates('/home-placeholder')[0]
+  const fakeFs = {
+    resolve: async (path) => path,
+    stat: async (path) => {
+      if (path === wanted) return { mode: 0o700 }
+      throw new Error('ENOENT')
+    },
+  }
+  assert.equal(await findSourcetreeGit(fakeFs, '/home-placeholder'), wanted)
+  assert.equal(await findSourcetreeGit({ resolve: async (p) => p, stat: async () => { throw new Error('ENOENT') } }, '/home-placeholder'), null)
+  assert.equal(await findSourcetreeGit(null, '/home-placeholder'), null)
 })
 
 test('gitdelegate: the helper is passed to ONE child, never configured globally', () => {

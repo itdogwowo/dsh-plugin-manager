@@ -40,7 +40,7 @@ import { buildBackend, buildOverview, SELF_NAME } from './overview.js'
 import { buildDetect } from './detect-report.js'
 import { buildPluginInventory } from './profile.js'
 import { setEnabled } from './patch-writer.js'
-import { findSourcetreeHelper, probeDshLauncher, probeGit, resolveTool, userHome } from './host.js'
+import { findSourcetreeGit, findSourcetreeHelper, probeDshLauncher, probeGit, resolveTool, sourcetreeExecPathFor, userHome } from './host.js'
 import { readLocalRefs, parseRemoteUrl } from './gitrefs.js'
 import { credentialStatus, normalizeHost, normalizeToken, redactResolution, resolveCredential, settingsStatus, writeCredentialStore, writeSettings } from './credentials.js'
 import { dshHomeOf } from './snapshot.js'
@@ -419,14 +419,24 @@ function remoteRefsHandler(get) {
       //
       // No Sourcetree (or no git) means no delegation — the REST path below is
       // untouched, token and all.
-      const helper = await findSourcetreeHelper(context.fs, userHome())
-      if (helper !== null) {
-        const gitPath = await resolveTool(context.subprocess, 'git')
+      // Sourcetree's OWN git first: its exec-path carries the credential helper the
+      // OS store already trusts, which is the difference between a silent push and
+      // a password prompt (measured; see dsh-Note/sync/skills/git-push).
+      const sourcetreeGit = await findSourcetreeGit(context.fs, userHome())
+      const helper = sourcetreeGit === null ? await findSourcetreeHelper(context.fs, userHome()) : null
+      if (sourcetreeGit !== null || helper !== null) {
+        const gitPath = sourcetreeGit ?? (await resolveTool(context.subprocess, 'git'))
         if (gitPath !== null) {
           // A delegation that fails is REPORTED, not silently retried with a token
           // the user never offered: the reason is the answer.
-          const delegated = await listRemoteRefs(context.subprocess, { url: remote.url, cwd: root, helper, gitPath })
-          sendJson(res, 200, { ...delegated, name, remote })
+          const delegated = await listRemoteRefs(context.subprocess, {
+            url: remote.url,
+            cwd: root,
+            helper,
+            gitPath,
+            execPath: sourcetreeExecPathFor(sourcetreeGit),
+          })
+          sendJson(res, 200, { ...delegated, name, remote, sourcetreeGit: sourcetreeGit !== null })
           return
         }
       }
