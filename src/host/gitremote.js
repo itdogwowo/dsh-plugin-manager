@@ -311,8 +311,11 @@ export async function listRemoteRefs(subprocess, input) {
   out.branches = parsed.branches.slice(0, MAX_REMOTE_REFS)
   out.counts = { tags: out.tags.length, branches: out.branches.length }
   out.ok = true
+  // What is claimed here is only what is known: which route read the refs, and
+  // that no token crossed into this process. A public remote needs no credential
+  // at all, so "someone authenticated" would be a claim this code cannot make.
   out.note = out.helper === null
-    ? "git's own credential helper answered, so no token was needed here"
-    : 'Sourcetree authenticated this request; no token entered the plugin'
+    ? "read with git's own configuration; no token entered the plugin"
+    : "read with Sourcetree's credential helper; no token entered the plugin"
   return out
 }

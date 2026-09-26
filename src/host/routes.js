@@ -423,7 +423,12 @@ function remoteRefsHandler(get) {
       // OS store already trusts, which is the difference between a silent push and
       // a password prompt (measured; see dsh-Note/sync/skills/git-push).
       const sourcetreeGit = await findSourcetreeGit(context.fs, userHome())
-      const helper = sourcetreeGit === null ? await findSourcetreeHelper(context.fs, userHome()) : null
+      // The helper is passed EVEN WHEN Sourcetree's git is used, because it is the
+      // helper — not the binary — that hands over the credential: measured, the
+      // bundle's own `git-credential-osxkeychain` blocks on an OS prompt while
+      // `Resources/bin/git-credential-sourcetree` answers in 6.7 s. Leaving it out
+      // would send a private-repo request back to the helper on PATH.
+      const helper = await findSourcetreeHelper(context.fs, userHome())
       if (sourcetreeGit !== null || helper !== null) {
         const gitPath = sourcetreeGit ?? (await resolveTool(context.subprocess, 'git'))
         if (gitPath !== null) {

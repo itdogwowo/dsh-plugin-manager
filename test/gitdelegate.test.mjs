@@ -159,7 +159,7 @@ test('gitdelegate: a real git child lists a real repository', async (t) => {
     // The annotated tag's commit is the one a checkout lands on, and the listing
     // says where it came from — the helper is null here, which the note admits.
     assert.match(listed.branches[0].commit, /^[0-9a-f]{40}$/)
-    assert.match(listed.note, /no token was needed/)
+    assert.match(listed.note, /no token entered the plugin/)
     assert.equal(listed.tokenUsed, false)
     // The command it reports must not leak a helper path into the panel.
     assert.match(listed.command, /ls-remote/)
