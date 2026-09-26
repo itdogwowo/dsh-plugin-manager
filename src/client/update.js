@@ -438,7 +438,14 @@ export function createUpdatePanel(react) {
                     [planData.tools.git, planData.tools.dsh]
                       .map((tool, index) => {
                         const name = index === 0 ? t('updateToolGit') : t('updateToolDsh')
-                        return tool !== null && tool !== undefined && tool.available === true ? `${name} ✓` : `${name} ${t('updateToolAbsent')}`
+                        // Three states, not two. `null` means the probe was never RUN
+                        // — nothing about this change needed that tool — which is a
+                        // different claim from "it is not on this machine". The
+                        // delivery checklist has said so all along; the renderer
+                        // said "找不到" for both, which is how a working `dsh` came to
+                        // look missing in a live panel.
+                        if (tool === null || tool === undefined) return `${name} ${t('updateToolNotProbed')}`
+                        return tool.available === true ? `${name} ✓` : `${name} ${t('updateToolAbsent')}`
                       })
                       .join(' · '),
                   ),

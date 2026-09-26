@@ -624,6 +624,420 @@ export function createPanel(react, makeUpdatePanel) {
   }
 
   /**
+   * The credential section: where a token may come from, and what may never
+   * happen to one.
+   *
+   * Its own component with its own hooks, deliberately NOT folded into `Panel`.
+   * The render test drives hook slots BY INDEX, so one more hook inside `Panel`
+   * would silently shift every seeded slot after it and turn unrelated
+   * assertions into noise; under React a child component owns a separate hook
+   * sequence anyway, and the descriptor tree still reaches it.
+   *
+   * The one rule this section renders is the rule the host enforces: it shows
+   * where a token WOULD come from and never receives one — the status payload
+   * carries a source, its availability, and a masked hint. The token field is
+   * the only place a value exists in this half, it travels one way, and it is
+   * dropped from state as soon as the host confirms the write.
+   *
+   * @param {object} props - `{ t, face }`.
+   * @returns {object} the section.
+   */
+  function CredentialsSection(props) {
+    const t = props.t
+    const face = props.face
+    // Hook order, in this order:
+    // 0 status, 1 token draft, 2 busy action, 3 outcome, 4 host draft,
+    // 5 disabled draft, 6 token visibility, 7 clear confirmation, 8 the mount effect.
+    const [state, setState] = useState({ phase: 'loading', data: null, error: null })
+    const [token, setToken] = useState('')
+    const [busy, setBusy] = useState(null)
+    const [outcome, setOutcome] = useState(null)
+    const [hostDraft, setHostDraft] = useState(null)
+    const [disabledDraft, setDisabledDraft] = useState(null)
+    // The reveal toggle is a convenience for checking a paste, never a default:
+    // a token starts masked.
+    const [showToken, setShowToken] = useState(false)
+    // "Clear" is the one destructive control here, and it is armed by its own
+    // label rather than by a modal.
+    const [clearArmed, setClearArmed] = useState(false)
+
+    /** Read the host's status. Nothing here assumes what a write did. */
+    function refresh() {
+      if (face === null || face === undefined || typeof face.credentialStatus !== 'function') {
+        setState({ phase: 'error', data: null, error: t('noHost') })
+        return
+      }
+      setState({ phase: 'loading', data: null, error: null })
+      face
+        .credentialStatus()
+        .then((data) => setState({ phase: 'ready', data, error: null }))
+        .catch((error) =>
+          setState({ phase: 'error', data: null, error: error !== null && error !== undefined && error.message ? error.message : String(error) }),
+        )
+    }
+
+    useEffect(() => {
+      refresh()
+    }, [])
+
+    /**
+     * Run one host-side action, then re-read the status.
+     *
+     * `succeed` turns the host's answer into the notice, so a refusal and a
+     * success are both the host's words rather than the panel's guess. A
+     * successful save clears the draft: once the host holds the token, the copy
+     * in this component's state has no reason to exist.
+     *
+     * @param {object} action - `{ label, call, succeed, clearToken? }`.
+     */
+    function run(action) {
+      if (face === null || face === undefined || typeof action.call !== 'function') {
+        setOutcome({ ok: false, error: t('noHost') })
+        return
+      }
+      setBusy(action.label)
+      setOutcome(null)
+      action
+        .call(face)
+        .then((result) => {
+          setBusy(null)
+          setOutcome(action.succeed(result))
+          if (result !== null && result !== undefined && result.ok === true) {
+            if (action.clearToken === true) setToken('')
+            refresh()
+          }
+        })
+        .catch((error) => {
+          setBusy(null)
+          setOutcome({ ok: false, error: error !== null && error !== undefined && error.message ? error.message : String(error) })
+        })
+    }
+
+    const data = state.data
+    const ready = state.phase === 'ready' && data !== null && data !== undefined
+    const sources = ready && Array.isArray(data.sources) ? data.sources : []
+    const store = ready && data.store !== null && data.store !== undefined ? data.store : null
+    const host = ready && typeof data.host === 'string' ? data.host : ''
+    const storedDisabled = ready && Array.isArray(data.disabledSources) ? data.disabledSources : []
+    const draftDisabled = disabledDraft === null ? storedDisabled : disabledDraft
+    const draftHost = hostDraft === null ? (ready && typeof data.defaultHost === 'string' ? data.defaultHost : '') : hostDraft
+    const idle = busy !== null
+
+    const metaRows = ready
+      ? [
+          [t('credHost'), host],
+          [t('credStore'), h('span', { className: 'pm-mono pm-break' }, String(store === null ? '' : store.path))],
+          [
+            t('credMode'),
+            // Three states, not two: an absent file has no mode to complain
+            // about, and warning about one is a false alarm that teaches the
+            // reader to ignore the warning that matters.
+            store === null || store.exists !== true
+              ? t('credModeNone')
+              : store.modeSafe === true
+                ? t('credModeOk')
+                : t('credModeBad'),
+          ],
+          [
+            t('credToken'),
+            store !== null && store.saved === true && typeof store.hint === 'string'
+              ? h('span', { className: 'pm-mono' }, store.hint)
+              : `${t('credStoreNone')}${store !== null && typeof store.savedAt === 'string' ? ` · ${store.savedAt}` : ''}`,
+          ],
+        ]
+      : []
+
+    // ── the method chooser ───────────────────────────────────────────────────
+    // ONE list, two jobs: it reports each source's state AND lets the user pick
+    // which one to use. A separate status list beside a separate picker would say
+    // the same thing twice and make the reader match two orderings by eye.
+    //
+    // `request` is not offered as a method: a token typed for one call is not
+    // something to "always use", so a setting that offered it would be a setting
+    // that silently does nothing.
+    const chosenMethod = ready && typeof data.preferredSource === 'string' ? data.preferredSource : 'auto'
+    const chooseMethod = (id) =>
+      run({
+        label: `method:${id}`,
+        call: (host_) => host_.saveSettings({ preferredSource: id }),
+        succeed: () => ({ ok: true, note: `${t('credMethod')}：${id === 'auto' ? t('credMethodAuto') : id}` }),
+      })
+
+    /** One selectable method: a radio, its name, its state, and why. */
+    const methodRow = (id, label, badge, detail) =>
+      h(
+        'label',
+        { className: `pm-cred-choice-row${chosenMethod === id ? ' pm-cred-on' : ''}`, key: `method-${id}` },
+        h('input', {
+          type: 'radio',
+          name: 'pm-cred-method',
+          checked: chosenMethod === id,
+          disabled: idle,
+          onChange: () => chooseMethod(id),
+        }),
+        h('span', { className: 'pm-cred-choice-name' }, label),
+        badge,
+        h('span', { className: 'pm-cred-detail' }, detail),
+      )
+
+    const methodRows = [
+      methodRow(
+        'auto',
+        t('credMethodAuto'),
+        null,
+        chosenMethod === 'auto' ? t('credMethodAutoHint') : `${t('credMethodAutoHint')}（${t('credMethodNotActive')}）`,
+      ),
+      ...sources
+        .filter((source) => source.id !== 'request')
+        .map((source) =>
+          methodRow(
+            String(source.id),
+            String(source.id),
+            h(
+              'span',
+              {
+                className:
+                  'pm-cred-badge ' +
+                  (source.disabled === true ? 'pm-cred-badge-off' : source.available === true ? 'pm-cred-badge-ok' : 'pm-cred-badge-no'),
+              },
+              source.disabled === true ? t('credOff') : source.available === true ? t('credOk') : t('credNo'),
+            ),
+            String(source.detail === null || source.detail === undefined ? '' : source.detail),
+          ),
+        ),
+    ]
+
+    // A VISIBLE label, not a placeholder standing in for one: a placeholder
+    // disappears exactly when the user needs to know what the field is for. The
+    // reveal toggle exists because checking a paste is the one thing you cannot do
+    // with dots, and it is a toggle rather than a default.
+    //
+    // Clearing is confirmed inline rather than with a system dialog: it destroys
+    // the only stored copy, and a modal for one reversible action is a worse trade
+    // than a second press.
+    const tokenRow = h(
+      'div',
+      { className: 'pm-cred-field' },
+      h(
+        'div',
+        { className: 'pm-cred-row' },
+        h('label', { className: 'pm-cred-label', htmlFor: 'pm-cred-token' }, t('credToken')),
+        h('input', {
+          id: 'pm-cred-token',
+          className: 'pm-input pm-cred-token',
+          type: showToken ? 'text' : 'password',
+          value: token,
+          placeholder: t('credTokenHint'),
+          autoComplete: 'off',
+          spellCheck: false,
+          disabled: idle,
+          onChange: (event) => setToken(event.target.value),
+        }),
+        h(
+          'button',
+          {
+            className: 'pm-btn pm-btn-sm',
+            type: 'button',
+            'aria-pressed': showToken,
+            disabled: idle,
+            onClick: () => setShowToken((current) => current !== true),
+          },
+          showToken ? t('credTokenHide') : t('credTokenShow'),
+        ),
+        h(
+          'button',
+          {
+            className: 'pm-btn',
+            type: 'button',
+            disabled: idle || token.trim().length === 0,
+            onClick: () =>
+              run({
+                label: 'save',
+                clearToken: true,
+                call: (host_) => host_.saveToken(host, token.trim()),
+                succeed: (result) => ({
+                  ok: true,
+                  note: result !== null && result.store !== null && result.store !== undefined ? `${t('credStore')}：${String(result.store.hint)}` : '',
+                }),
+              }),
+          },
+          busy === 'save' ? t('credWorking') : t('credSave'),
+        ),
+        h(
+          'button',
+          {
+            className: `pm-btn${clearArmed ? ' pm-btn-danger' : ''}`,
+            type: 'button',
+            disabled: idle || store === null || store.saved !== true,
+            // Two presses, no modal: the label itself is the confirmation.
+            onClick: () => {
+              if (!clearArmed) {
+                setClearArmed(true)
+                return
+              }
+              setClearArmed(false)
+              run({
+                label: 'clear',
+                call: (host_) => host_.clearToken(host),
+                succeed: () => ({ ok: true, note: t('credStoreNone') }),
+              })
+            },
+          },
+          busy === 'clear' ? t('credWorking') : clearArmed ? t('credClearConfirm') : t('credClear'),
+        ),
+      ),
+      h('div', { className: 'pm-cred-help' }, t('credTokenHelper')),
+    )
+
+    const actionRow = h(
+      'div',
+      { className: 'pm-cred-actions' },
+      h(
+        'button',
+        {
+          className: 'pm-btn pm-btn-sm',
+          type: 'button',
+          disabled: idle,
+          onClick: () =>
+            run({
+              label: 'test',
+              call: (host_) => host_.testCredential(host),
+              succeed: (result) =>
+                result !== null && result !== undefined && result.resolved === true
+                  ? { ok: true, note: `${t('credResolved')}：${String(result.source)}` }
+                  : { ok: false, error: String((result !== null && result !== undefined && result.error) || t('credUnresolved')) },
+            }),
+        },
+        busy === 'test' ? t('credWorking') : t('credTest'),
+      ),
+      // The import runs entirely host-side. A panel that had to receive the token
+      // before storing it would BE the leak this whole design avoids.
+      h(
+        'button',
+        {
+          className: 'pm-btn pm-btn-sm',
+          type: 'button',
+          disabled: idle,
+          onClick: () =>
+            run({
+              label: 'adopt',
+              call: (host_) => host_.adoptCredential(host),
+              succeed: (result) =>
+                result !== null && result !== undefined && result.saved === true
+                  ? { ok: true, note: `${t('credResolved')}：${String(result.adoptedFrom)}` }
+                  : { ok: false, error: String((result !== null && result !== undefined && result.error) || t('credUnresolved')) },
+            }),
+        },
+        busy === 'adopt' ? t('credWorking') : t('credAdopt'),
+      ),
+    )
+
+    const notice =
+      outcome === null
+        ? null
+        : outcome.ok === true
+          ? h(Notice, { title: t('credDone'), body: String(outcome.note === null || outcome.note === undefined ? '' : outcome.note) })
+          : h(Notice, { bad: true, title: t('checkFailed'), body: String(outcome.error === null || outcome.error === undefined ? '' : outcome.error) })
+
+    const settingsBlock = h(
+      'details',
+      { className: 'pm-disclosure' },
+      h('summary', null, t('credSettings')),
+      h(
+        'div',
+        { className: 'pm-cred-row' },
+        h('span', { className: 'pm-cred-id' }, t('credDefaultHost')),
+        h('input', {
+          className: 'pm-input',
+          type: 'text',
+          value: draftHost,
+          disabled: idle,
+          'aria-label': t('credDefaultHost'),
+          onChange: (event) => setHostDraft(event.target.value),
+        }),
+        h(
+          'button',
+          {
+            className: 'pm-btn pm-btn-sm',
+            type: 'button',
+            disabled: idle,
+            onClick: () =>
+              run({
+                label: 'settings',
+                call: (host_) => host_.saveSettings({ defaultHost: draftHost, disabledSources: draftDisabled }),
+                succeed: () => ({ ok: true, note: t('credSavedSettings') }),
+              }),
+          },
+          busy === 'settings' ? t('credWorking') : t('credSaveSettings'),
+        ),
+      ),
+      h(
+        'div',
+        { className: 'pm-cred-off' },
+        sources.map((source) =>
+          h(
+            'label',
+            { key: `cred-off-${String(source.id)}` },
+            h('input', {
+              type: 'checkbox',
+              // `request` is one-shot by nature: it is a token typed for a single
+              // call, so there is nothing to disable.
+              checked: draftDisabled.includes(source.id),
+              disabled: idle || source.id === 'request',
+              onChange: (event) =>
+                setDisabledDraft(
+                  draftDisabled.includes(source.id)
+                    ? draftDisabled.filter((id) => id !== source.id)
+                    : [...draftDisabled, source.id],
+                ),
+            }),
+            String(source.id),
+          ),
+        ),
+      ),
+      h('div', { className: 'pm-sec-note' }, t('credDisable')),
+    )
+
+    return h(
+      Section,
+      { title: t('sectionCredentials') },
+      h('div', { className: 'pm-sec-note' }, t('credIntro')),
+      state.phase === 'loading' ? h('div', { className: 'pm-sec-note' }, t('reading')) : null,
+      state.phase === 'error' ? h(Notice, { bad: true, title: t('failed'), body: String(state.error) }) : null,
+      ready ? h(Meta, { rows: metaRows }) : null,
+      // A store that exists but cannot be used is a different answer from "no
+      // token saved", and the host says which one it is.
+      store !== null && store.error !== null && store.error !== undefined
+        ? h(Notice, { bad: true, title: t('credMode'), body: String(store.error) })
+        : null,
+      ready ? h('div', { className: 'pm-sec-note' }, t('credMethodHint')) : null,
+      // A client bundle can be newer than the running host half (the client half
+      // reloads without a restart). The chooser would then accept a click and
+      // remember nothing, which is this project's least favourite failure mode: a
+      // control that silently does nothing. So it says so instead.
+      ready && data.preferredSource === undefined ? h('div', { className: 'pm-sec-note' }, t('credHostStale')) : null,
+      ready ? h('div', { className: 'pm-cred-choices' }, methodRows) : null,
+      ready ? tokenRow : null,
+      // The one sentence that answers "why does it keep asking for my password?".
+      // A saved token is found at step 2 of the chain, so no helper is spawned and
+      // no system dialog is raised — ever again.
+      ready ? h('div', { className: 'pm-sec-note' }, t('credStoreFirst')) : null,
+      ready ? actionRow : null,
+      notice,
+      ready ? settingsBlock : null,
+      h(
+        'div',
+        { className: 'pm-controls' },
+        h(
+          'button',
+          { className: 'pm-btn pm-btn-sm', type: 'button', disabled: state.phase === 'loading', onClick: refresh },
+          state.phase === 'loading' ? t('reading') : t('refresh'),
+        ),
+      ),
+    )
+  }
+
+  /**
    * Attached for tests. `PluginCard` and its two rules cannot be observed from
    * the descriptor tree: `h(PluginCard, …)` is a component descriptor and the
    * test stub deliberately never invokes components, so the class name, the
@@ -635,11 +1049,16 @@ export function createPanel(react, makeUpdatePanel) {
    * `__update` is exposed for the same reason as the card: the closed trigger
    * lives inside the card's control cluster, so proving *where* it sits and that
    * a click opens the panel needs the card invoked, not the tree walked.
+   *
+   * `__CredentialsSection` is here for the same reason again, plus one of its
+   * own: it holds its own hook sequence, so a test must be able to mount it
+   * without disturbing — or being disturbed by — the panel's slots.
    */
   Panel.__cardClassOf = cardClassOf
   Panel.__stateKeyOf = stateKeyOf
   Panel.__PluginCard = PluginCard
   Panel.__InstallField = InstallField
+  Panel.__CredentialsSection = CredentialsSection
   Panel.__update = { UpdateTrigger, UpdatePanel, useUpdate }
 
   return Panel
@@ -1104,6 +1523,12 @@ export function createPanel(react, makeUpdatePanel) {
       entryTable === null ? null : h(Section, { title: t('sectionEntries') }, entryTable),
 
       envRows.length === 0 ? null : h(Section, { title: t('sectionEnv') }, h(Meta, { rows: envRows })),
+
+      // Credentials LAST, and as its own component: it is the one part of this
+      // panel that writes something other than the profile, and everything above
+      // it reads. It loads its own status when it mounts, which is a request the
+      // panel already paid for by being open (R4).
+      h(CredentialsSection, { t, face: props.face }),
 
       foot,
     )

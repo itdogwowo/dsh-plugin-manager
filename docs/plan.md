@@ -31,7 +31,7 @@
 | 架構 | 已定案：**做成 DSH 插件**（宿主半 + 瀏覽器半），見 §4 |
 | 實測環境 | DSH **`0.1.5-rc.3`**／Node `24.14.1`／Windows。**不是最新版**，升級要重跑 `host-notes` |
 | M0 進度 | 🟡 進行中——A1/A2/A3（一半）/A4/A7 已答；餘見 `docs/host-notes.md` 最後一節 |
-| 測試 | `npm test` → **219 pass**（新增 5 個檔：`host-tools`／`gitrefs`／`verify`／`pipeline`／`update-routes`，其中的子進程與 junction 都是真的） |
+| 測試 | `npm test` → **287 tests / 280 pass / 7 fail**（macOS 實測）。⚠️ 那 7 個失敗**在乾淨的 HEAD 上一模一樣**——用 `git worktree` 對照驗過，全部是 macOS `/private/var` symlink 這類路徑假設（`readManifest`×3、`inventory`×2、checkout 計畫×2），與插件邏輯無關，也與本輪新增的程式碼無關 |
 | 下一步 | 在真的 `dsh web` 上驗（需重啟宿主）；補 M5／M6 |
 
 ### 2.2 這一輪修掉的兩個 bug（原本會讓功能靜默失效）
@@ -147,7 +147,13 @@ dsh-plugin-manager/
 - ❌ 備份還原 `~/.dsh` 資料（`@xiaoyuyu6420/dsh-backup` 做了）
 - ❌ 單一插件包體檢（`dsh-plugin-doctor` 做了）
 - ❌ 自己實作 pnpm 語意（一律 forward 官方 `dsh plugin`）
-- ❌ 不碰 sessions / credentials / settings.yaml
+- ❌ 不碰 sessions / `settings.yaml` / 宿主的 `settings` 服務（R3）
+
+> **2026-09 session 修訂（使用者同意）**：原本這一條是「不碰 sessions / credentials / settings.yaml」。
+> 使用者要「認證不要只從 git 一個途徑拿」，所以 credentials 這一項**收窄**為：
+> **只以自己的 `$DSH_HOME/.dsh-pm/` 為範圍**（`credentials.json` 0600、`settings.json`）。
+> 仍然**永不**：讀寫 `settings.yaml`、碰宿主的 `settings` 服務（R3）、改 git 的全域設定或 credential helper 組態、
+> 把 token 回傳瀏覽器、把 token 寫進 log 或快照。實作見 §7.3。
 
 ### 4.4 差異化（唯一賣點）
 
@@ -442,6 +448,107 @@ $DSH_HOME/.dsh-pm/
 把順序釘住。
 
 **尚未驗的**：面板要**重啟 `dsh web`** 才會有這顆欄位（宿主半改了）。見 §8.2。
+
+---
+
+### 7.3 認證鏈 ＋ 設定頁（2026-09 session，兩半都已完成）
+
+使用者要求：「這個工具應該可以讓我隨時跳轉版本……我的認證可能會在 Sourcetree 上面或者其他外部工具上面，
+所以獲取認證的途徑不要單單只從 git 中獲取，因此可能我們還要設計一個小小的設定頁面」。
+四個決策（使用者選的）：**先做認證鏈 ＋ 設定頁**；**存 0600 設定檔**；**同意把 §4.3 的 credentials non-goal 收窄**；
+**安裝切成 `link:` 本機 checkout**。
+
+| 新增 | 檔案 | 支撐 |
+|---|---|---|
+| 認證解析鏈 ＋ 兩個 JSON 狀態檔 ＋ 遮罩投影 | `src/host/credentials.js` | §4.3 修訂版 |
+| 憑證工具假設（`gh` 候選、`git credential fill`、`/usr/bin/security`、安全的 host 清洗） | `src/host/host.js` | R7 |
+| `settings`（GET/POST）、`credentials`（GET/POST） | `src/host/routes.js`、`src/endpoints.json` | — |
+| 19 個測試（含一個**真子行程**驗 stdin 協定） | `test/credentials.test.mjs` | §9 |
+
+**解析順序**（第一個有答案的勝出，每個來源的成敗都記錄下來）：
+
+| # | 來源 | 讀哪裡 | 為什麼在這個位置 |
+|---|---|---|---|
+| 1 | `request` | 面板單次帶入 | 明示勝過一切 |
+| 2 | `store` | `$DSH_HOME/.dsh-pm/credentials.json`（0600） | 使用者自己指定要記住的 |
+| 3 | `env` | **宿主行程**的 `DSH_PM_GITHUB_TOKEN`／`GITHUB_TOKEN`／`GH_TOKEN` | ⚠️ 不能在子行程讀：seam 會洗掉憑證形狀的名稱 |
+| 4 | `git-credential` | `git credential fill`，協定走 **stdin** | 使用者既有 helper（macOS 上通常就是 osxkeychain） |
+| 5 | `keychain` | `/usr/bin/security find-internet-password -s <host> -w`（macOS 限定） | Sourcetree 把帳號存成一般 internet password，所以不必認識 Sourcetree |
+| 6 | `gh` | `gh auth token` | 有裝 GitHub CLI 的人不用再設定一次 |
+
+**五條不變式**（每一條都有測試）：
+
+1. **token 永不離開宿主半。** 送到瀏覽器的一律經過 `redactResolution`／`credentialStatus`：只有來源 id、可用性、遮罩後綴（`ghp_••••••6789`）。
+2. **token 永不被插進訊息。** 失敗只用來源與退出碼描述。
+3. **token 永不進快照。** 快照複製的是 profile 檔（R5），狀態檔在 `$DSH_HOME/.dsh-pm/`，不在其中。
+4. **store 是 0600。** `fs.writeText` 沒有 mode 參數、預設 umask 會做出世界可讀的檔，所以 store 走 `node:fs` 並明寫 mode。
+   這**不是**繞過沙箱——沙箱也攔 `node:fs`；被拒絕就照實回報，不要求更寬的模式。
+5. **token 不經子行程的環境。** 子行程只拿得到 argv 或 stdin；`GIT_TERMINAL_PROMPT=0` 是為了讓「helper 答不出來」變成快速失敗，而不是在 web 請求裡等到逾時。
+
+> ⚠️ **誠實揭露一個沒有解決的取捨**：`gitremote.js` 把 token 放在子行程的 **argv** 裡，
+> 同機同使用者可以在那個子行程活著的時候從 process table 看到它。這是既有行為，本輪沒有假裝解決。
+> 改善方向是把 bearer 也改走 stdin（`runProcess` 已支援），列為後續。
+
+**T5 已實測完成（原本是 §4.6 的前置阻塞項）**：`github:` 直連來源在 `pnpm-lock.yaml` 的長相。
+
+```
+dsh-plugin-manager:
+  specifier: github:itdogwowo/dsh-plugin-manager
+  version: https://codeload.github.com/itdogwowo/dsh-plugin-manager/tar.gz/9ada4ba3f3ce77650551aea0ced217e24ae7b71e
+dsh-plugin-manager@https://codeload.github.com/.../tar.gz/9ada4ba...:
+  resolution: {gitHosted: true, integrity: sha512-p0q+…, tarball: https://codeload.github.com/...}
+```
+
+⇒ ① `github:` 被解析成 **codeload tarball 並釘死 commit SHA**（所以「我現在在哪個 commit」讀得到）；
+② `resolution.integrity` 存在 ⇒ **§4.6 的換版訊號對 git 直連來源成立**，那一項不再被 T5 阻塞。
+
+**設定頁（面板半）也已完成**：
+
+| 新增 | 檔案 | 支撐 |
+|---|---|---|
+| `CredentialsSection`：來源狀態列、token 欄、測試／匯入／清除、設定（預設主機＋停用來源） | `src/client/panel.js` | — |
+| 7 個 face 方法（`credentialStatus`／`saveToken`／`clearToken`／`testCredential`／`adoptCredential`／`settings`／`saveSettings`） | `src/client/face.js` | — |
+| 30 個中英 key | `src/client/copy.js` | — |
+| `.pm-cred-*` 樣式 | `src/client/styles.js` | — |
+| 9 個渲染測試（含「payload 裡有 token 也不准進樹」） | `test/panel-render.test.mjs` | §9.3 |
+
+> ⚠️ **為什麼設定區是獨立元件，而不是寫進 `Panel`**：渲染測試的 React stub 是一個**扁平 hook 陣列**，
+> `Panel` 的 slot 被 `__seed` 按索引釘死（`[tick, query, state, …]`）。在 `Panel` 裡多加一個 hook，
+> 會讓它之後的**每一個** seed 全部位移——那是會把無關斷言變成噪音的改動。
+> 所以設定區有自己的元件與自己的 hook 序列，測試用 `mountCredentials()` 從 `Panel` 用完的 cursor 之後掛載，
+> 並且要**在 settle 之後再 render 一次**（缺少 host face 的錯誤路徑是同步 setState，
+> 內層 re-render 會被外層呼叫的返回值覆蓋——stub 的假象，不是元件的行為）。
+
+**實測結果（真宿主 ＋ 真瀏覽器，2026-09）**：
+
+| 項目 | 結果 |
+|---|---|
+| 面板在真瀏覽器 | ✅ 設定 → 外掛 → **插件管理器**與原生兩頁並列；3 張卡片、6 列來源、badge 與宿主 payload 一致 |
+| `credentials` GET／POST 路由 | ✅ `200`，GET 4–10 ms |
+| **T2：宿主半內 spawn 是否安全** | ✅ **是**（原本是 ⛔ 阻塞 M2 的未測項）。子行程真的跑起來了——第一次看到 `exitCode: null` 時我一度判成「spawn 被拒」，計時後才修正：一次 `test` 請求 **20.04 s ＝ 2 × 10 s**，兩個 helper 都是**到 deadline 被殺**，不是沒被啟動 |
+| 卡住的原因 | macOS 對「別的 App 建立的鑰匙圈項目」跳授權對話框（Sourcetree），背景子行程無人可按 → 逾時。逾時已從 10 s 收到 **4 s** |
+| 一個假警報（已修） | store 檔不存在時，面板顯示「⚠ 不是 0600」——對不存在的檔案喊權限問題。現在是三態：`尚未建立`／`0600 ✓`／`⚠ 不是 0600`（新增 `store.exists`） |
+| 一個診斷缺陷（已修） | 子行程失敗時只印 `exited null`，把「被拒／服務不在／逾時／被殺」壓成同一句話。現在 `describeFailure()` 會帶上 seam 的 `error` 與 stderr 第一行 |
+| **一個阻塞更新的真 bug（已修）** | update 的計畫只探測**分類出來**需要的工具（本機 checkout 只要 git），但管道的裝前驗（V1 compose）**永遠**要 dsh。`launcher` 因此一直是 `null`，`runPipeline` 就用 `no probe result` 拒絕**每一次本機 checkout 更新**——而面板把「沒探測」顯示成「找不到」，所以看起來像 dsh 不見了。現在 `needs` 一律含 `dsh`（去重），客戶半也改成三態 `✓／找不到／未探測`。回歸測試：`test/update-routes.test.mjs` |
+| **兩個 prompt 其實是同一個存放區（已修）** | `git credential fill`（osxkeychain）與 `/usr/bin/security … -w` 讀的是**同一個** OS 存放區，卻各跳一個獨立的 macOS 授權框。只按了第二個「允許」的人，之後每次都會再被問一次——實測到的「一直跟我要密碼」迴圈。⇒ `keychain` 來源**預設關閉**（`DEFAULT_DISABLED_SOURCES`），預設一次只留一個 prompt；要用再到設定勾選 |
+| DSH 自己有憑證服務（未接） | `dsh-credentials`／`dsh-credentials-local`／`dsh-authorization` 都在樹裡，`~/.dsh/.credentials.yaml` 是 **0600**，內含 `records:`（目前只有 `client-connection/browser-session`）與 `refs: DEEPSEEK_API_KEY`——**沒有 GitHub token**。要「一處管理」的話，宿主半可以用 `ctx.get('credentials')`（可選讀取，不進 `inject`，R2 不變）接上去 |
+| **認證方式可選（本輪新增）** | 使用者要求「設定要讓我選擇認證方式」。新增 `settings.preferredSource`（`auto` 或某個來源 id）：選定＝**只問那一個**，其餘來源記錄成 `the chosen method is "…"` 而不是靜默跳過；`request` 刻意**不能**選（一次性 token 不是一種「方式」，能選就是一個什麼都不做的設定）。`POST /credentials { action:'test', source }` 可以不存設定就問「這一種行不行」。UI 依 `ui-ux-pro-max`（來源：`dsh-Note/sync/skills/`）的規則重做：可見 label、密碼顯示切換、破壞性動作二次確認、進階選項收合 |
+| **代辦取代抽取（本輪，使用者指示）** | 使用者：「不要嘗試搜尋獲得他裏面的認證，我們只是操作他來幫我們代辦。」⇒ 移除 `git-credential` 與 `keychain` 兩個來源（它們把 Sourcetree 存的憑證複製進本行程），`SOURCE_IDS` 縮成 4 個、`DEFAULT_DISABLED_SOURCES` 變空。新增 `host.js` 的 `sourcetreeHelperCandidates`／`credentialHelperArgs`／`findSourcetreeHelper`／`userHome`，`gitremote.js` 的 `parseLsRemote`／`listRemoteRefs`：用 **Sourcetree 自己的 helper** 跑一個 `git -c credential.helper=… ls-remote` 子行程，憑證只到那個子行程，插件只看 ref 清單。`routes.js` 的 remote-refs **優先走代辦**，沒有 Sourcetree 才回退 REST。測試：`test/gitdelegate.test.mjs`（6 個，含真子行程對本機 bare repo） |
+| **沒有 Sourcetree CLI 這回事（實測）** | 使用者原本以為「有一套 Sourcetree 指令可以呼叫，所以 Windows／Mac 通用、不必處理路徑」。實測：`sourcetree`／`stree` 都不存在（PATH 沒有），bundle 的 `Contents/Resources/bin/` 只有**特定用途的內部執行檔**（`git-credential-sourcetree`、`mercurial-credential-manager`、`gpg`…），沒有通用指令。那些是 **git credential helper**：它們不是被「呼叫」的，是**被 git 呼叫**的（實作 git 的 get/store/erase 協定）。⇒ 「讓 Sourcetree 代辦」＝**叫 git 用它**，不是叫一個 Sourcetree 命令 |
+| 可攜的那一層是 **git**，不是 Sourcetree | 跨 Windows／Mac 通用的介面是 `git config credential.helper` 與 `git ls-remote`／`fetch`；Sourcetree 只是某台機器上「其中一個 helper」。所以正確的可攜設計是**問 git 它自己設定了什麼**，而不是去找 Sourcetree 的路徑。目前程式在找不到 Sourcetree helper 時（＝Windows 的常態，因為候選清單是 macOS-only）就是走這條：直接跑 `git ls-remote`，由 git 用它自己的設定完成認證 ✓。**下一步（未做）**：把 `git config --get-all credential.helper` 的結果讀出來顯示，讓面板說得出「這次是誰認證的」，並補 Windows 的候選路徑（**不憑空發明**，要實測） |
+| Sourcetree 真的裝在哪 | ⚠️ 我一度說「這台沒有 Sourcetree」——錯了，是**查錯路徑**。它在 `~/Applications/Sourcetree.app`（不是 `/Applications`），而且**當時正在執行**。它自帶 `Contents/Resources/bin/git-credential-sourcetree` 與 `Contents/Resources/git_local/bin/git-credential-osxkeychain`。`ls /Applications \| grep` 之所以看得到名字，是 Spotlight 的別名，`ls -la` 解不開 → 別再用單一 `ls -d <app>` 判斷「有沒有裝」 |
+| 一個踩到的測試陷阱 | `findByClass` 是**子字串**比對，所以 `pm-cred-method` 會同時命中容器 `pm-cred-methods` 與 `pm-cred-method-name`（6 列變 13 列）。測試檔自己就警告過同一件事（`pm-install` vs `pm-install-row`），我還是踩了 → 類名改成互不為前綴的 `pm-cred-choice-row`／`pm-cred-choice-name`／`pm-cred-on` |
+
+> ⚠️ **這一輪的教訓**：`exitCode: null` 不是診斷。我一度據此寫下「宿主半 spawn 壞了」，
+> 而正確答案是「子行程被逾時砍掉」。**先量時間，再下結論。**
+
+**尚未做**：
+
+| 未做 | 為什麼 |
+|---|---|
+| `github:` 安裝的**遠端 ref 選擇器**（版本跳轉） | 需要「從 spec 推 remote」（沒有 `.git` 時），見 §4.6。T5 已不再阻塞 |
+| 鑰匙圈來源在無人按框時的行為 | 目前是逾時後放棄；要更聰明的做法得先確認 macOS 有沒有非互動的解讀方式 |
+| `gitremote.js` 的 bearer 改走 stdin | 目前仍在子行程 argv（本節上方已誠實揭露） |
 
 ---
 

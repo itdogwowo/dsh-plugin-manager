@@ -213,6 +213,7 @@ async function renderPanel(payload, options = {}) {
   renderPanel.__stateKeyOf = entry.component.__stateKeyOf
   renderPanel.__PluginCard = entry.component.__PluginCard
   renderPanel.__InstallField = entry.component.__InstallField
+  renderPanel.__CredentialsSection = entry.component.__CredentialsSection
   renderPanel.__update = entry.component.__update
   // The stub itself, so a test can drive a card's own hooks (see the update
   // trigger case): a card's state is not reachable from the tree it returns.
@@ -1431,6 +1432,323 @@ test('install field: a rolled-back run says so, and lists what was left behind',
   // everything must not be presented as a clean one.
   assert.match(text, /node_modules\/some-plugin/)
 })
+
+// ── The credential section ──────────────────────────────────────────────────
+//
+// The section is its own component with its own hook sequence, and these tests
+// mount it directly. That is not a convenience: the panel's slots are seeded BY
+// INDEX elsewhere in this file, so a section sharing them would turn every one
+// of those seeds into a lie — which is exactly why it was built as a child.
+
+/** Let the microtask queue drain so a resolved promise's setState lands. */
+async function settle() {
+  for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setImmediate(resolve))
+}
+
+/** A `credentials` status payload, shaped exactly like the host's. */
+function credentialsPayload(over = {}) {
+  // No file at all is the starting state, so that is what the fixture says:
+  // `mode` is null and `modeSafe` false because there is no file to have a mode.
+  // The live panel used to render that as "⚠ not 0600", which is a warning about
+  // nothing and the reason `exists` exists.
+  const store = {
+    path: '$DSH_HOME/.dsh-pm/credentials.json',
+    exists: false,
+    saved: false,
+    hint: null,
+    savedAt: null,
+    mode: null,
+    modeSafe: false,
+    error: null,
+  }
+  return {
+    ok: true,
+    host: 'github.com',
+    defaultHost: 'github.com',
+    disabledSources: [],
+    store,
+    sources: [
+      { id: 'request', available: true, detail: 'a token typed into the panel, used for that request only', disabled: false },
+      { id: 'store', available: false, detail: "this plugin's own 0600 file", disabled: false },
+      { id: 'env', available: false, detail: 'none of DSH_PM_GITHUB_TOKEN, GITHUB_TOKEN, GH_TOKEN is set', disabled: false },
+      { id: 'gh', available: true, detail: 'the gh CLI', disabled: false },
+    ],
+    ...over,
+  }
+}
+
+/**
+ * Mount the credential section on its OWN hook slots.
+ *
+ * `renderPanel` must have run first (it is what loads the bundle and exposes the
+ * component). The cursor the panel left is where this section's slots begin, so
+ * the mount resets to it rather than assuming an index.
+ *
+ * Returns a handle rather than a tree because this component is INTERACTIVE:
+ * after a click its state settles on a later tick, and a snapshot taken at mount
+ * would assert on the render before the answer arrived.
+ *
+ * @param {object} face - the host face stub.
+ * @returns {Promise<{ current: () => object, calls: object[] }>} the mounted section.
+ */
+async function mountCredentials(face) {
+  const react = renderPanel.__react
+  const Credentials = renderPanel.__CredentialsSection
+  assert.equal(typeof Credentials, 'function', 'the panel must expose the credential section to tests')
+  const start = react.__cursor()
+  const props = { t: (key) => `T:${key}`, face }
+  let tree = null
+  /** Render once at this section's own slot offset. */
+  const render = () => {
+    react.__begin()
+    react.__cursor(start)
+    tree = Credentials(props)
+  }
+  react.__onRerender(render)
+  render()
+  await settle()
+  // Render once more on purpose. A setState that lands DURING the mount call —
+  // which is what the missing-face path does, synchronously — re-renders inside
+  // that call and is then clobbered by the outer call's return value. Rendering
+  // again after the dust settles leaves `tree` holding the latest state either
+  // way, so a test never asserts on a render that has already been superseded.
+  render()
+  return { current: () => tree }
+}
+
+/** The button whose label is `label` (copy is stubbed as `T:key`). */
+function buttonByLabel(tree, label) {
+  return findByClass(tree, 'pm-btn').find((node) => (node.children ?? []).filter((child) => typeof child === 'string').includes(label))
+}
+
+/** Give the section a host face to mount against, and a panel to borrow slots from. */
+async function withCredentials(face) {
+  await renderPanel(withPlugins([pluginRow({ name: 'cred-tool' })]), { renders: 1 })
+  return mountCredentials(face)
+}
+
+test('credentials: the method chooser lists every method, in the host’s order', async () => {
+  const mounted = await withCredentials({ credentialStatus: () => Promise.resolve(credentialsPayload()) })
+  const tree = mounted.current()
+
+  // One row per CHOOSABLE method: the automatic chain, then every source except
+  // `request` — a token typed for one call is not a method to select.
+  assert.equal(findByClass(tree, 'pm-cred-choice-row').length, 4, 'auto plus three sources')
+  const rows = findByClass(tree, 'pm-cred-choice-row')
+  assert.deepEqual(
+    rows.map((row) => textOf(row.children[1].children).join('')),
+    ['T:credMethodAuto', 'store', 'env', 'gh'],
+    'the order shown must be the order the host resolves in',
+  )
+  // Every row is a real radio group member, and the whole row is the hit area.
+  assert.deepEqual(
+    rows.map((row) => row.children[0].props.type),
+    ['radio', 'radio', 'radio', 'radio'],
+  )
+  assert.equal(rows[0].children[0].props.checked, true, 'automatic is the default selection')
+
+  const text = textOf(tree).join(' ')
+  assert.match(text, /T:sectionCredentials/)
+  assert.match(text, /T:credIntro/, 'the rule the host enforces is stated where the list is')
+  assert.match(text, /T:credMethodHint/)
+  // This payload has no `preferredSource`, which is what an OLDER host half sends
+  // — the panel must not offer a choice that would be silently forgotten.
+  assert.match(text, /T:credHostStale/, 'a newer panel must admit an older host half')
+  assert.match(text, /T:credOk/)
+  assert.match(text, /T:credNo/)
+  // No store file yet: the mode row says so instead of warning about a mode that
+  // cannot exist. The live panel rendered "⚠ not 0600" here, which is a warning
+  // about nothing.
+  assert.match(text, /T:credModeNone/)
+  // And the sentence that answers "why does it keep asking for my password?".
+  assert.match(text, /T:credStoreFirst/)
+  // Availability is per method, not one summary: git IS available here and gh is not.
+  const badges = findByClass(tree, 'pm-cred-badge').map((node) => textOf(node.children).join(''))
+  assert.deepEqual(badges, ['T:credNo', 'T:credNo', 'T:credOk'])
+})
+
+test('credentials: choosing a method saves exactly that choice', async () => {
+  const written = []
+  const mounted = await withCredentials({
+    credentialStatus: () => Promise.resolve(credentialsPayload()),
+    saveSettings: (patch) => {
+      written.push(patch)
+      return Promise.resolve({ ok: true })
+    },
+  })
+  const rows = findByClass(mounted.current(), 'pm-cred-choice-row')
+  rows.find((row) => textOf(row.children[1].children).join('') === 'env').children[0].props.onChange()
+  await settle()
+
+  // The choice is a PATCH of one field: a client that sent the whole settings
+  // object would race with any other change made in between.
+  assert.deepEqual(written, [{ preferredSource: 'env' }])
+  assert.match(textOf(mounted.current()).join(' '), /T:credDone/)
+})
+
+test('credentials: the token field has a visible label and a reveal toggle', async () => {
+  const mounted = await withCredentials({ credentialStatus: () => Promise.resolve(credentialsPayload()) })
+  const label = findByClass(mounted.current(), 'pm-cred-label')
+  assert.equal(label.length, 1, 'a label element, not a placeholder standing in for one')
+  assert.match(textOf(label[0].children).join(''), /T:credToken/)
+
+  const field = () => findByClass(mounted.current(), 'pm-cred-token')[0]
+  assert.equal(field().props.type, 'password', 'masked by default')
+  const toggle = buttonByLabel(mounted.current(), 'T:credTokenShow')
+  assert.equal(toggle.props['aria-pressed'], false)
+  toggle.props.onClick()
+  await settle()
+  assert.equal(field().props.type, 'text', 'the toggle is what makes a paste checkable')
+  assert.equal(buttonByLabel(mounted.current(), 'T:credTokenHide').props['aria-pressed'], true)
+})
+
+test('credentials: a token in the payload must never reach the tree', async () => {
+  // The host promises it never sends one. This asserts the PANEL would not render
+  // it even if that promise broke, because the panel is the half a user can see.
+  const raw = 'ghp_thisMustNeverBeRendered1234567890'
+  const mounted = await withCredentials({
+    credentialStatus: () =>
+      Promise.resolve(
+        credentialsPayload({
+          store: { ...credentialsPayload().store, saved: true, hint: 'ghp_••••••7890', savedAt: '2026-09-26T00:00:00.000Z', token: raw },
+        }),
+      ),
+  })
+  const tree = mounted.current()
+  const text = textOf(tree).join(' ')
+  assert.ok(!text.includes(raw), 'the panel must render the masked hint, never the value')
+  assert.match(text, /ghp_••••••7890/, 'and the hint is what it shows instead')
+  assert.equal(findByProp(tree, 'token').length, 0, 'no descriptor may carry a token prop')
+})
+
+test('credentials: the token field is a password field that does not autocomplete', async () => {
+  const mounted = await withCredentials({ credentialStatus: () => Promise.resolve(credentialsPayload()) })
+  const field = findByClass(mounted.current(), 'pm-cred-token')
+  assert.equal(field.length, 1, 'exactly one token field')
+  assert.equal(field[0].props.type, 'password', 'a token must not be rendered in clear text')
+  assert.equal(field[0].props.autoComplete, 'off', 'and must not be offered to the browser’s autofill')
+  assert.equal(field[0].props.value, '', 'it starts empty: the panel has no token to prefill')
+})
+
+test('credentials: saving sends the token once, re-reads the status, and drops the draft', async () => {
+  const calls = { saved: [], status: 0 }
+  // The stub has to CHANGE once the token is saved, exactly as the host does:
+  // the point of this test is that the panel re-reads the store rather than
+  // assuming what its own write did, and a stub that always answers "no store"
+  // would make that re-read indistinguishable from no re-read at all.
+  let stored = false
+  const savedStore = () => ({ ...credentialsPayload().store, exists: true, saved: true, mode: 0o600, modeSafe: true, hint: 'ghp_••••••cret' })
+  const face = {
+    credentialStatus: () => {
+      calls.status += 1
+      return Promise.resolve(stored ? credentialsPayload({ store: savedStore() }) : credentialsPayload())
+    },
+    saveToken: (host, token) => {
+      calls.saved.push([host, token])
+      stored = true
+      return Promise.resolve({ ok: true, store: savedStore() })
+    },
+  }
+  const mounted = await withCredentials(face)
+  assert.equal(buttonByLabel(mounted.current(), 'T:credSave').props.disabled, true, 'nothing typed, nothing to save')
+
+  findByClass(mounted.current(), 'pm-cred-token')[0].props.onChange({ target: { value: 'ghp_secret' } })
+  const save = buttonByLabel(mounted.current(), 'T:credSave')
+  assert.equal(save.props.disabled, false, 'a typed token enables the save')
+  save.props.onClick()
+  await settle()
+
+  assert.deepEqual(calls.saved, [['github.com', 'ghp_secret']], 'the token travels to the host exactly once')
+  assert.equal(calls.status, 2, 'the panel re-reads the host state instead of assuming what the write did')
+  assert.equal(findByClass(mounted.current(), 'pm-cred-token')[0].props.value, '', 'the draft is dropped once the host holds it')
+  assert.match(textOf(mounted.current()).join(' '), /T:credDone/)
+  // And the mode row now describes a file that exists and is 0600.
+  assert.match(textOf(mounted.current()).join(' '), /T:credModeOk/)
+})
+
+test('credentials: clearing is offered only when the store actually holds a token', async () => {
+  const empty = await withCredentials({ credentialStatus: () => Promise.resolve(credentialsPayload()) })
+  assert.equal(buttonByLabel(empty.current(), 'T:credClear').props.disabled, true)
+
+  await renderPanel(withPlugins([pluginRow({ name: 'cred-tool' })]), { renders: 1 })
+  const saved = await mountCredentials({
+    credentialStatus: () =>
+      Promise.resolve(
+        credentialsPayload({ store: { ...credentialsPayload().store, exists: true, saved: true, mode: 0o600, modeSafe: true, hint: 'ghp_••••••cret' } }),
+      ),
+  })
+  assert.equal(buttonByLabel(saved.current(), 'T:credClear').props.disabled, false)
+})
+
+test('credentials: testing names the source that would answer, or repeats the host’s refusal', async () => {
+  const resolved = await withCredentials({
+    credentialStatus: () => Promise.resolve(credentialsPayload()),
+    testCredential: () => Promise.resolve({ ok: true, resolved: true, source: 'keychain', host: 'github.com', tried: [], error: null }),
+  })
+  buttonByLabel(resolved.current(), 'T:credTest').props.onClick()
+  await settle()
+  const good = textOf(resolved.current()).join(' ')
+  assert.match(good, /T:credResolved/)
+  assert.match(good, /keychain/)
+
+  await renderPanel(withPlugins([pluginRow({ name: 'cred-tool' })]), { renders: 1 })
+  const refused = await mountCredentials({
+    credentialStatus: () => Promise.resolve(credentialsPayload()),
+    testCredential: () => Promise.resolve({ ok: false, resolved: false, source: null, tried: [], error: 'no credential for github.com could be found in any source' }),
+  })
+  buttonByLabel(refused.current(), 'T:credTest').props.onClick()
+  await settle()
+  // A refusal is an answer: it is shown in the host's words, not replaced by one.
+  assert.match(textOf(refused.current()).join(' '), /no credential for github\.com could be found in any source/)
+})
+
+test('credentials: import asks the host to MOVE the token, never to hand it over', async () => {
+  const payloads = []
+  const mounted = await withCredentials({
+    credentialStatus: () => Promise.resolve(credentialsPayload()),
+    adoptCredential: (host) => {
+      payloads.push({ action: 'adopt', host })
+      return Promise.resolve({ ok: true, saved: true, adoptedFrom: 'keychain' })
+    },
+  })
+  buttonByLabel(mounted.current(), 'T:credAdopt').props.onClick()
+  await settle()
+
+  // The request carries a host and nothing else. A panel that received the token
+  // first would be the leak this design exists to avoid.
+  assert.deepEqual(payloads, [{ action: 'adopt', host: 'github.com' }])
+  assert.match(textOf(mounted.current()).join(' '), /keychain/)
+})
+
+test('credentials: a disabled source is shown as disabled, and the draft round-trips', async () => {
+  const written = []
+  const mounted = await withCredentials({
+    credentialStatus: () => Promise.resolve(credentialsPayload({ disabledSources: ['env'] })),
+    saveSettings: (patch) => {
+      written.push(patch)
+      return Promise.resolve({ ok: true })
+    },
+  })
+  // `h('div', props, array)` leaves the array as the single child, so the labels
+  // are one level down and have to be flattened out.
+  const boxes = (findByClass(mounted.current(), 'pm-cred-off')[0].children ?? []).flat().filter((child) => child !== null && child !== undefined)
+  const byId = new Map(boxes.map((label) => [textOf(label.children[1]).join(''), label.children[0]]))
+  assert.equal(byId.get('env').props.checked, true, 'the host said env is disabled, and the box shows it')
+  assert.equal(byId.get('request').props.disabled, true, 'a one-shot source has nothing to disable')
+
+  byId.get('gh').props.onChange({ target: { checked: true } })
+  buttonByLabel(mounted.current(), 'T:credSaveSettings').props.onClick()
+  await settle()
+  assert.deepEqual(written, [{ defaultHost: 'github.com', disabledSources: ['env', 'gh'] }])
+  assert.match(textOf(mounted.current()).join(' '), /T:credSavedSettings/)
+})
+
+test('credentials: with no host face the section explains itself instead of throwing', async () => {
+  const mounted = await withCredentials(null)
+  const text = textOf(mounted.current()).join(' ')
+  assert.match(text, /T:noHost/, 'a missing channel is a sentence, not a blank section')
+})
+
 
 
 

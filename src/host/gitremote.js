@@ -30,7 +30,7 @@
  * R1 applies: `node:` and relative imports only.
  */
 
-import { base64, firstLine, runProcess } from './host.js'
+import { base64, credentialHelperArgs, firstLine, runProcess } from './host.js'
 import { parseRemoteRefs, remoteApiFor } from './gitrefs.js'
 
 /** How long the remote is given to answer, in milliseconds. */
@@ -205,5 +205,112 @@ export async function fetchRemoteRefs(subprocess, remote, options = {}) {
   out.ok = true
   // A partial answer is still an answer, but the missing half is named.
   if (failures.length > 0) out.note = `${out.note ?? ''} — partial: ${failures.join('; ')}`.trim()
+  return out
+}
+
+/**
+ * A remote ref listing, read from `git ls-remote`'s output.
+ *
+ * Pure and exported for the tests: the parsing is where a ref listing can lie
+ * (an annotated tag appears TWICE — once as the tag object and once as `^{}`,
+ * its peeled commit), and a picker that shows the same version twice looks like
+ * it has more choices than it does.
+ *
+ * @param {string} text - the child's stdout.
+ * @returns {{ tags: object[], branches: object[] }} `{ name, commit }` items.
+ */
+export function parseLsRemote(text) {
+  const tags = []
+  const branches = []
+  for (const raw of String(text === null || text === undefined ? '' : text).split('\n')) {
+    const line = raw.trim()
+    if (line.length === 0) continue
+    const parts = line.split(/\s+/)
+    const sha = parts[0]
+    const ref = parts[1]
+    if (typeof sha !== 'string' || typeof ref !== 'string' || !/^[0-9a-f]{7,40}$/i.test(sha)) continue
+    if (ref.startsWith('refs/tags/')) {
+      const peeled = ref.endsWith('^{}')
+      const name = peeled ? ref.slice('refs/tags/'.length, -3) : ref.slice('refs/tags/'.length)
+      if (name.length === 0) continue
+      // The peeled line carries the COMMIT an annotated tag points at, which is
+      // what a checkout lands on; the tag object's own line arrives first, so the
+      // peeled one replaces it rather than being dropped.
+      const at = tags.findIndex((item) => item.name === name)
+      if (at >= 0) {
+        if (peeled) tags[at] = { name, commit: sha }
+        continue
+      }
+      tags.push({ name, commit: sha })
+    } else if (ref.startsWith('refs/heads/')) {
+      const name = ref.slice('refs/heads/'.length)
+      if (name.length > 0) branches.push({ name, commit: sha })
+    }
+  }
+  return { tags, branches }
+}
+
+/**
+ * List a remote's tags and branches by DELEGATING the authentication to git.
+ *
+ * ⚠️ The difference from {@link fetchRemoteRefs} is not the output — it is who
+ * holds the credential. The REST path needs a TOKEN IN THIS PROCESS, which means
+ * the user has to paste one, or the plugin has to read one out of the OS store.
+ * This path hands the problem to a git child configured with a credential helper
+ * (`credentialHelperArgs`), so Sourcetree authenticates the request itself and
+ * this plugin only ever sees the ref list. Nothing secret enters this process,
+ * and nothing secret can leak out of it.
+ *
+ * `GIT_TERMINAL_PROMPT=0` is kept: with no TTY a prompt would not be a question,
+ * it would be a hang.
+ *
+ * @param {object} subprocess - the resolved `subprocess` service.
+ * @param {object} input - `{ url, cwd?, helper?, gitPath? }`.
+ * @returns {Promise<object>} the same shape `fetchRemoteRefs` returns.
+ */
+export async function listRemoteRefs(subprocess, input) {
+  const out = {
+    ok: false,
+    provider: 'git',
+    note: null,
+    delegated: true,
+    helper: typeof input?.helper === 'string' ? input.helper : null,
+    tokenUsed: false,
+    tags: [],
+    branches: [],
+    counts: { tags: 0, branches: 0 },
+    truncated: false,
+    command: null,
+    error: null,
+  }
+  const git = typeof input?.gitPath === 'string' && input.gitPath.length > 0 ? input.gitPath : 'git'
+  const argv = [git]
+  if (typeof input?.cwd === 'string' && input.cwd.length > 0) argv.push('-C', input.cwd)
+  argv.push(...credentialHelperArgs(input?.helper))
+  argv.push('ls-remote', '--heads', '--tags', String(input?.url ?? ''))
+  out.command = argv.map((part) => (part === out.helper ? '<helper>' : part)).join(' ')
+
+  const result = await runProcess(subprocess, {
+    argv,
+    cwd: '.',
+    timeoutMs: REMOTE_TIMEOUT_MS + 10000,
+    env: { GIT_TERMINAL_PROMPT: '0' },
+  })
+  if (!result.ok) {
+    const detail = firstLine(result.stderr) ?? result.error ?? `it exited ${String(result.exitCode)}`
+    out.error = `git ls-remote failed: ${detail}`
+    out.timedOut = result.timedOut === true
+    return out
+  }
+
+  const parsed = parseLsRemote(result.stdout)
+  if (parsed.tags.length > MAX_REMOTE_REFS || parsed.branches.length > MAX_REMOTE_REFS) out.truncated = true
+  out.tags = parsed.tags.slice(0, MAX_REMOTE_REFS)
+  out.branches = parsed.branches.slice(0, MAX_REMOTE_REFS)
+  out.counts = { tags: out.tags.length, branches: out.branches.length }
+  out.ok = true
+  out.note = out.helper === null
+    ? "git's own credential helper answered, so no token was needed here"
+    : 'Sourcetree authenticated this request; no token entered the plugin'
   return out
 }

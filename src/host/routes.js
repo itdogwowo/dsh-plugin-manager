@@ -20,24 +20,31 @@
  *
  * | route | method | effect |
  * |---|---|---|
- * | `overview`, `backend`, `detect`, `refs`, `plan` | GET | read only, always safe |
+ * | `overview`, `backend`, `detect`, `refs`, `plan`, `settings` | GET | read only, always safe |
  * | `remoteRefs` | POST | **contacts the network** — the only route that does |
  * | `apply`, `rollback` | POST | take a snapshot, run a change, verify, roll back on failure |
  * | `toggle` | POST | writes one row into the user's `cordis.patch.yml` |
+ * | `credentials` | GET/POST | reads and writes this plugin's own 0600 store under `$DSH_HOME/.dsh-pm/` |
  *
  * `remoteRefs` is a POST rather than a GET on purpose. It tells a remote which
  * repository this machine is looking at, so it must be impossible to trigger by
  * a page load, a prefetch or a link — only by a deliberate request that a button
  * makes.
+ *
+ * `credentials` never returns a token, on any method: the GET answers with
+ * source availability and a masked hint, and the POST answers with the same
+ * projection after saving, clearing or resolving. See `credentials.js`.
  */
 
 import { buildBackend, buildOverview, SELF_NAME } from './overview.js'
 import { buildDetect } from './detect-report.js'
 import { buildPluginInventory } from './profile.js'
 import { setEnabled } from './patch-writer.js'
-import { probeDshLauncher, probeGit } from './host.js'
+import { findSourcetreeHelper, probeDshLauncher, probeGit, resolveTool, userHome } from './host.js'
 import { readLocalRefs, parseRemoteUrl } from './gitrefs.js'
-import { fetchRemoteRefs } from './gitremote.js'
+import { credentialStatus, normalizeHost, normalizeToken, redactResolution, resolveCredential, settingsStatus, writeCredentialStore, writeSettings } from './credentials.js'
+import { dshHomeOf } from './snapshot.js'
+import { fetchRemoteRefs, listRemoteRefs } from './gitremote.js'
 import { toolInstallHint } from './install-hints.mjs'
 import {
   checkPackageSpec,
@@ -65,6 +72,8 @@ export const ENDPOINTS = {
   apply: 'apply',
   rollback: 'rollback',
   toggle: 'toggle',
+  settings: 'settings',
+  credentials: 'credentials',
 }
 
 /** Cap on a request body, so a stuck client cannot grow a buffer without bound. */
@@ -401,6 +410,27 @@ function remoteRefsHandler(get) {
         return
       }
 
+      // ── delegation first ────────────────────────────────────────────────────
+      // If Sourcetree's credential helper is on this machine, git can
+      // authenticate the request ITSELF: the helper answers the git child, the
+      // plugin only reads the ref list, and no token has to exist anywhere. That
+      // is why this branch is tried before the REST path, which needs a token in
+      // this process.
+      //
+      // No Sourcetree (or no git) means no delegation — the REST path below is
+      // untouched, token and all.
+      const helper = await findSourcetreeHelper(context.fs, userHome())
+      if (helper !== null) {
+        const gitPath = await resolveTool(context.subprocess, 'git')
+        if (gitPath !== null) {
+          // A delegation that fails is REPORTED, not silently retried with a token
+          // the user never offered: the reason is the answer.
+          const delegated = await listRemoteRefs(context.subprocess, { url: remote.url, cwd: root, helper, gitPath })
+          sendJson(res, 200, { ...delegated, name, remote })
+          return
+        }
+      }
+
       // A token is used only if the caller supplies one; none is stored, and
       // none is read from the environment (the subprocess seam scrubs
       // credential-shaped names anyway).
@@ -498,7 +528,15 @@ function planHandler(get) {
       let classified = null
       if (verb === 'update') {
         classified = await classifyUpdate({ fs: context.fs, inventory: context.inventory, name, ref })
-        needs = classified.needs ?? []
+        // ⚠️ The CLASSIFIED need is not the whole need. A checkout update moves the
+        // tree with `git`, but EVERY change also runs the pipeline's pre-check (V1
+        // compose), which spawns `dsh --dump-config`. Probing only the classified
+        // tool left `launcher` null, and `runPipeline` then refused every local
+        // checkout update with "the dsh launcher is unavailable: no probe result" —
+        // measured live, on a machine where `dsh` worked. A plan that hides a tool
+        // the run will require is also a plan that turns into a refusal after the
+        // button is pressed.
+        needs = [...new Set([...(classified.needs ?? []), 'dsh'])]
       }
       const probes = await probeFor(context, needs)
 
@@ -645,7 +683,9 @@ function applyHandler(get) {
       let needs = ['dsh']
       if (verb === 'update') {
         const classified = await classifyUpdate({ fs: context.fs, inventory: context.inventory, name, ref })
-        needs = classified.needs ?? []
+        // Same reason as the plan handler: V1 compose needs the launcher for ANY
+        // change, so the run cannot be probed more narrowly than the run needs.
+        needs = [...new Set([...(classified.needs ?? []), 'dsh'])]
       }
       const probes = await probeFor(context, needs)
 
@@ -761,6 +801,179 @@ function rollbackHandler(get) {
  * @param {object} webServer - the resolved `webServer` service.
  * @returns {void}
  */
+/**
+ * The plugin's own state directory, resolved per request.
+ *
+ * Deliberately NOT part of `resolveChangeContext`: a credential question has
+ * nothing to do with the profile's dependency tree, and reading the lockfile to
+ * answer "which sources are available on this machine" would be work spent on no
+ * answer.
+ *
+ * @param {(name: string) => unknown} get - optional-service reader.
+ * @returns {Promise<{ dshHome: string|null, error: string|null }>} the context.
+ */
+async function resolveStateContext(get) {
+  const inventory = await buildPluginInventory(get('fs'), SELF_NAME)
+  if (!inventory.available || inventory.profile === null) {
+    return { dshHome: null, error: `the profile could not be read, so this plugin's state directory is unknown: ${inventory.reason}` }
+  }
+  const home = dshHomeOf(inventory.profile.dir)
+  if (typeof home !== 'string' || home.length === 0) {
+    return { dshHome: null, error: 'the harness home could not be determined, so this plugin has nowhere to keep its state' }
+  }
+  return { dshHome: home, error: null }
+}
+
+/**
+ * GET returns the settings; POST merges a patch into them.
+ *
+ * This is the plugin's OWN file under `$DSH_HOME/.dsh-pm/` — not the host's
+ * `settings` service, and not `$DSH_HOME/settings.yaml` (docs/plan.md §4.3).
+ *
+ * @param {(name: string) => unknown} get - optional-service reader.
+ * @returns {(req: object, res: object) => Promise<void>} the handler.
+ */
+function settingsHandler(get) {
+  return async function handle(req, res) {
+    try {
+      const state = await resolveStateContext(get)
+      if (state.error !== null) {
+        sendJson(res, 200, { ok: false, error: state.error })
+        return
+      }
+
+      if (req.method === 'GET') {
+        sendJson(res, 200, await settingsStatus(state.dshHome))
+        return
+      }
+      if (req.method !== 'POST') {
+        sendJson(res, 405, { ok: false, error: `this route accepts GET or POST, not ${String(req.method)}` })
+        return
+      }
+
+      const body = await readJsonBody(req)
+      const written = await writeSettings(state.dshHome, {
+        defaultHost: body.defaultHost,
+        disabledSources: body.disabledSources,
+        preferredSource: body.preferredSource,
+      })
+      if (!written.ok) {
+        sendJson(res, 200, { ok: false, path: written.path, error: written.error })
+        return
+      }
+      sendJson(res, 200, { ...(await settingsStatus(state.dshHome)), written: true })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[dsh-plugin-manager] settings failed: ${message}`)
+      sendJson(res, 500, { ok: false, error: message })
+    }
+  }
+}
+
+/**
+ * Read the credential chain, save a token, forget one, resolve one, or import
+ * one from another source — and never return a token on any of those paths.
+ *
+ * `adopt` exists because the browser must never hold a secret: "take the token
+ * from my keychain and remember it in the plugin's own store" has to happen
+ * entirely host-side. A UI that could do this by receiving a token first would
+ * be a UI that leaks one.
+ *
+ * @param {(name: string) => unknown} get - optional-service reader.
+ * @returns {(req: object, res: object) => Promise<void>} the handler.
+ */
+function credentialsHandler(get) {
+  return async function handle(req, res) {
+    try {
+      const state = await resolveStateContext(get)
+      if (state.error !== null) {
+        sendJson(res, 200, { ok: false, error: state.error })
+        return
+      }
+
+      const subprocess = get('subprocess')
+      if (req.method === 'GET') {
+        sendJson(res, 200, await credentialStatus({ subprocess, dshHome: state.dshHome }))
+        return
+      }
+      if (req.method !== 'POST') {
+        sendJson(res, 405, { ok: false, error: `this route accepts GET or POST, not ${String(req.method)}` })
+        return
+      }
+
+      const body = await readJsonBody(req)
+      const action = typeof body.action === 'string' && body.action.length > 0 ? body.action : 'status'
+      const asked = normalizeHost(body.host)
+      const target = asked ?? (await settingsStatus(state.dshHome)).defaultHost
+      // `source` lets the panel ask "would this METHOD work?" without saving that
+      // choice first, so a per-method test button never has to write a setting to
+      // find out.
+      const chain = {
+        subprocess,
+        dshHome: state.dshHome,
+        host: asked,
+        source: typeof body.source === 'string' && body.source.length > 0 ? body.source : undefined,
+      }
+
+      if (action === 'save') {
+        const token = normalizeToken(body.token)
+        if (token === null) {
+          sendJson(res, 200, {
+            ok: false,
+            error: 'a token is required, and it may not be empty, longer than 512 characters, or contain control characters',
+          })
+          return
+        }
+        const written = await writeCredentialStore(state.dshHome, target, token)
+        if (!written.ok) {
+          sendJson(res, 200, { ok: false, path: written.path, error: written.error })
+          return
+        }
+        sendJson(res, 200, { ...(await credentialStatus({ ...chain, host: target })), saved: true })
+        return
+      }
+
+      if (action === 'clear') {
+        const written = await writeCredentialStore(state.dshHome, target, null)
+        if (!written.ok) {
+          sendJson(res, 200, { ok: false, path: written.path, error: written.error })
+          return
+        }
+        sendJson(res, 200, { ...(await credentialStatus({ ...chain, host: target })), removed: written.removed })
+        return
+      }
+
+      if (action === 'test') {
+        const resolution = await resolveCredential(chain)
+        sendJson(res, 200, { ok: resolution.token !== null, ...redactResolution(resolution) })
+        return
+      }
+
+      if (action === 'adopt') {
+        const resolution = await resolveCredential(chain)
+        if (resolution.token === null) {
+          sendJson(res, 200, { ok: false, ...redactResolution(resolution) })
+          return
+        }
+        const written = await writeCredentialStore(state.dshHome, target, resolution.token)
+        if (!written.ok) {
+          sendJson(res, 200, { ok: false, path: written.path, error: written.error, ...redactResolution(resolution) })
+          return
+        }
+        // The answer names the source that was imported, never the value.
+        sendJson(res, 200, { ...(await credentialStatus({ ...chain, host: target })), adoptedFrom: resolution.source, saved: true })
+        return
+      }
+
+      sendJson(res, 400, { ok: false, error: `unknown action "${action}": expected save, clear, test, adopt or status` })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[dsh-plugin-manager] credentials failed: ${message}`)
+      sendJson(res, 500, { ok: false, error: message })
+    }
+  }
+}
+
 export function registerRoutes(ctx, webServer) {
   const get = (name) => ctx.get(name)
 
@@ -781,6 +994,8 @@ export function registerRoutes(ctx, webServer) {
     { path: `${PREFIX}/${ENDPOINTS.apply}`, label: 'apply', handler: applyHandler(get) },
     { path: `${PREFIX}/${ENDPOINTS.rollback}`, label: 'rollback', handler: rollbackHandler(get) },
     { path: `${PREFIX}/${ENDPOINTS.toggle}`, label: 'toggle', handler: toggleHandler(get) },
+    { path: `${PREFIX}/${ENDPOINTS.settings}`, label: 'settings', handler: settingsHandler(get) },
+    { path: `${PREFIX}/${ENDPOINTS.credentials}`, label: 'credentials', handler: credentialsHandler(get) },
   ]
 
   for (const route of routes) {

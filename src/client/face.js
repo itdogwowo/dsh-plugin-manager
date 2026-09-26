@@ -195,5 +195,57 @@ export function createFace(doFetch, endpoints) {
      * @returns {Promise<object>} the host's outcome, including `restartRequired`.
      */
     setEnabled: (id, enabled) => write('toggle', { id, enabled }),
+    /**
+     * Read the credential chain's status.
+     *
+     * Cheap by design — the host answers from the filesystem and PATH resolution
+     * and spawns nothing — so the section can load it when it mounts. The payload
+     * carries source availability and a MASKED hint, never a token: this half has
+     * no code path that could receive one, on this route or any other.
+     * @returns {Promise<object>} the status.
+     */
+    credentialStatus: () => read('credentials'),
+    /**
+     * Save one token in the host's own 0600 store.
+     *
+     * The value travels one way. The answer is the same masked status the GET
+     * returns, so the panel re-renders from what the host actually stored rather
+     * than from what it hoped it stored.
+     * @param {string} host - the host the token belongs to.
+     * @param {string} token - the token.
+     * @returns {Promise<object>} the status after the write.
+     */
+    saveToken: (host, token) => write('credentials', { action: 'save', host, token }),
+    /**
+     * Forget the stored token for one host.
+     * @param {string} host - the host.
+     * @returns {Promise<object>} the status after the write.
+     */
+    clearToken: (host) => write('credentials', { action: 'clear', host }),
+    /**
+     * Ask the chain which source would answer, without keeping anything.
+     * @param {string} host - the host to resolve for.
+     * @returns {Promise<object>} the redacted resolution.
+     */
+    testCredential: (host) => write('credentials', { action: 'test', host }),
+    /**
+     * Import a token another source already holds into this plugin's store.
+     *
+     * The whole operation runs host-side, and that is the point: "read it from my
+     * keychain and remember it" cannot be implemented by first handing the token
+     * to the browser, because a browser that receives a token is the leak this
+     * design exists to avoid.
+     * @param {string} host - the host to import for.
+     * @returns {Promise<object>} the status after the import.
+     */
+    adoptCredential: (host) => write('credentials', { action: 'adopt', host }),
+    /** Read this plugin's own settings. @returns {Promise<object>} the settings. */
+    settings: () => read('settings'),
+    /**
+     * Merge a patch into this plugin's own settings.
+     * @param {object} patch - `{ defaultHost?, disabledSources? }`.
+     * @returns {Promise<object>} the settings after the write.
+     */
+    saveSettings: (patch) => write('settings', patch),
   }
 }

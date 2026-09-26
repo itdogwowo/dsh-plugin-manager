@@ -32,6 +32,16 @@ export const DSH_PACKAGE = '@deepseek-ai/dsh'
 /** Path of the launcher inside that package, as read from the installed tree. */
 export const DSH_BIN_RELATIVE = 'lib/bin.js'
 
+/**
+ * The launcher's tail as SEGMENTS, so a candidate keeps one separator style.
+ *
+ * `DSH_PACKAGE` and `DSH_BIN_RELATIVE` both contain `/`, and splicing them in
+ * verbatim produced `C:\…\@deepseek-ai/dsh\lib/bin.js` — mixed, which Windows
+ * tolerates and which therefore hides a broken construction from the reference
+ * machine.
+ */
+const DSH_BIN_SEGMENTS = [...DSH_PACKAGE.split('/'), ...DSH_BIN_RELATIVE.split('/')]
+
 /** Default grace for a child that ignores termination, in milliseconds. */
 export const SPAWN_GRACE_MS = 2000
 
@@ -58,6 +68,100 @@ export const GIT_INSTALL_ROOTS = [
   '/usr/local/bin/git',
   '/opt/homebrew/bin/git',
 ]
+
+/** Candidate names for the GitHub CLI, tried in order. Optional everywhere. */
+export const GH_CANDIDATES = ['gh', 'gh.exe']
+
+
+/** `gh auth token` — prints the CLI's own token to stdout. */
+export const GH_AUTH_TOKEN_ARGS = ['auth', 'token']
+
+/**
+ * Where Sourcetree keeps its credential helpers, as RELATIVE paths inside the
+ * app bundle.
+ *
+ * Two of them, because Sourcetree ships both: its own `git-credential-sourcetree`
+ * (which asks the running app) and a copy of `git-credential-osxkeychain` (which
+ * reads the same keychain item osxkeychain always did). Which one is in that
+ * item's ACL is a fact about the machine, not something to guess — so both are
+ * offered to git, in this order, and the one that answers wins.
+ *
+ * The point of reaching for THESE binaries rather than the ones on PATH is
+ * delegation: the credential stays between Sourcetree and the git child. This
+ * plugin never reads it. Measured on the reference machine: the copy on PATH
+ * (`/opt/homebrew/bin/git`) raises a macOS authorization prompt, and the user's
+ * instruction is not to harvest its answer but to let Sourcetree do the work.
+ */
+export const SOURCETREE_HELPER_RELATIVE = [
+  'Contents/Resources/bin/git-credential-sourcetree',
+  'Contents/Resources/git_local/bin/git-credential-osxkeychain',
+]
+
+/** Where the Sourcetree bundle may live. `$HOME/Applications` first: Sourcetree's own installer uses it. */
+export const SOURCETREE_APP_RELATIVE = ['Applications/Sourcetree.app']
+
+/**
+ * The user's home directory, as THIS process sees it.
+ *
+ * `$HOME` on POSIX and `$USERPROFILE` on Windows — the same two names the profile
+ * resolver already trusts. `node:os` would answer too, but the environment is the
+ * authority this file already reads, and a second authority would be one more
+ * thing that can disagree.
+ */
+export function userHome() {
+  const env = typeof process !== 'undefined' && process.env ? process.env : {}
+  return str(env.HOME) ?? str(env.USERPROFILE)
+}
+
+/** Absolute candidate paths for Sourcetree's credential helpers, best first. */
+export function sourcetreeHelperCandidates(home) {
+  const roots = []
+  const base = str(home)
+  if (base !== null) {
+    for (const rel of SOURCETREE_APP_RELATIVE) roots.push(joinPath(base, ...rel.split('/')))
+  }
+  roots.push('/Applications/Sourcetree.app')
+  const out = []
+  for (const root of roots) {
+    for (const rel of SOURCETREE_HELPER_RELATIVE) out.push(joinPath(root, ...rel.split('/')))
+  }
+  return out
+}
+
+/**
+ * The git arguments that make ONE child use a specific credential helper.
+ *
+ * `-c credential.helper=<path>` rather than an environment variable: the
+ * subprocess seam drops credential-shaped env names, and a config override is
+ * exactly the scope wanted — this child, this command, nothing global and
+ * nothing written to the user's git config.
+ */
+export function credentialHelperArgs(helperPath) {
+  const path = str(helperPath)
+  return path === null ? [] : ['-c', `credential.helper=${path}`]
+}
+
+/**
+ * The first Sourcetree helper that exists on this machine, or null.
+ *
+ * A missing bundle is the normal case on a machine without Sourcetree, so this
+ * returns null instead of complaining; the caller decides what to say.
+ */
+export async function findSourcetreeHelper(fs, home) {
+  if (fs === undefined || fs === null || typeof fs.resolve !== 'function' || typeof fs.stat !== 'function') return null
+  for (const candidate of sourcetreeHelperCandidates(home)) {
+    try {
+      if ((await fs.stat(await fs.resolve(candidate))) !== undefined) return candidate
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return null
+}
+
+
+
+
 
 /** Coerce to a non-empty string or null. */
 function str(value) {
@@ -107,11 +211,25 @@ export function parentPath(path) {
  * walking up towards the filesystem root and testing the layout
  * `…/node_modules/@deepseek-ai/dsh/lib/bin.js`. Absolute and deterministic: no
  * PATH lookup, no `which`, no environment variable required.
+ *
+ * ⚠️ **Two constructions were wrong, and both failed silently** (measured on
+ * macOS: with the launcher's own real path as the entry, **0 of 14** candidates
+ * existed):
+ *
+ * 1. The ancestor was rejoined with a hard-coded `\`, so every POSIX candidate
+ *    was one file name like `\opt\homebrew\lib\…` rather than a path.
+ * 2. Only `<ancestor>/node_modules/…` was tried. A global install (Homebrew,
+ *    `npm -g`) puts the launcher at `<prefix>/lib/node_modules/…`, and `dsh` on
+ *    PATH is a shim at `<prefix>/bin/dsh` — Node does **not** resolve `argv[1]`
+ *    through that symlink, so the second layout is the only one that reaches it.
+ *
+ * @param {string|null} [entry] - the entry to derive from; defaults to this
+ *   process's `argv[1]`. Injectable so the walk-up is testable on any machine.
  * @returns {string[]} candidate paths, best first.
  */
-export function dshBinCandidates() {
+export function dshBinCandidates(entry = (typeof process !== 'undefined' && Array.isArray(process.argv) ? process.argv[1] : null)) {
   const out = []
-  const entry = typeof process !== 'undefined' && Array.isArray(process.argv) ? str(process.argv[1]) : null
+  const entryPath = str(entry)
 
   // `process.argv[1]` is the script the host was started with. Two shapes have
   // to be refused rather than guessed at:
@@ -125,14 +243,17 @@ export function dshBinCandidates() {
   // In both cases the honest answer is "no candidate", and the caller reports
   // that the launcher could not be located instead of resolving to the wrong
   // checkout.
-  if (entry === null || !/^([A-Za-z]:[\\/]|[\\/])/.test(entry)) return out
+  if (entryPath === null || !/^([A-Za-z]:[\\/]|[\\/])/.test(entryPath)) return out
 
-  const segments = entry.replace(/[\\/]+$/, '').split(/[\\/]/)
+  // The separator follows the entry, the same rule `joinPath` uses. Guessing it
+  // is what produced the unreachable candidates above.
+  const sep = entryPath.includes('\\') && !entryPath.includes('/') ? '\\' : '/'
+  const segments = entryPath.replace(/[\\/]+$/, '').split(/[\\/]/)
   for (let cut = segments.length - 1; cut > 0; cut -= 1) {
-    const base = segments.slice(0, cut).join('\\')
+    const base = segments.slice(0, cut).join(sep)
     if (base.length === 0) continue
-    out.push(`${base}\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js`)
-    out.push(`${base}/node_modules/@deepseek-ai/dsh/lib/bin.js`)
+    out.push([base, 'node_modules', ...DSH_BIN_SEGMENTS].join(sep))
+    out.push([base, 'lib', 'node_modules', ...DSH_BIN_SEGMENTS].join(sep))
   }
   return out
 }

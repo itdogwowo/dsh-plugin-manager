@@ -306,18 +306,52 @@ test('update routes: a checkout plan runs the git probe and reports the exact co
     const payload = JSON.parse(res.body)
     assert.equal(payload.kind, 'checkout')
     assert.deepEqual(payload.displayArgv, ['git', '-C', checkout, 'checkout', 'v1.9.0'])
-    assert.deepEqual(payload.needs, ['git'], 'a checkout needs git and nothing else')
-    // `dsh` was NOT probed: that is one spawn this route did not pay for.
-    assert.equal(payload.tools.dsh, null, 'an unprobed tool is null, which is not "absent"')
+    // ⚠️ This assertion used to read `['git']`, with the comment "a checkout needs
+    // git and nothing else" — and that was the bug. Moving the tree needs git, but
+    // EVERY change also runs the pipeline's pre-check (V1 compose), which spawns
+    // `dsh --dump-config`. Probing only the classified tool left `launcher` null,
+    // and `runPipeline` refused every local checkout update with "the dsh launcher
+    // is unavailable: no probe result" — measured live, on a machine where `dsh`
+    // worked. The classified need is not the run's need.
+    assert.deepEqual(payload.needs, ['git', 'dsh'], 'the move needs git, and the pre-check needs dsh')
+    assert.ok(payload.tools.dsh !== null, 'so the launcher IS probed, not left null')
     assert.ok(payload.tools.git !== null, 'git WAS probed, because this plan needs it')
     assert.ok(probes.some((name) => /git/i.test(name)), `expected a git probe, saw: ${probes.join(', ')}`)
-    assert.equal(probes.some((name) => /dsh/i.test(name)), false, `dsh must not be probed here, saw: ${probes.join(', ')}`)
+    assert.ok(probes.some((name) => /dsh/i.test(name)), `expected a dsh probe, saw: ${probes.join(', ')}`)
     // The plan is honest about runnability on a machine with no git.
     assert.equal(typeof payload.runnable, 'boolean')
     if (payload.tools.git.available !== true) {
       assert.equal(payload.runnable, false)
       assert.match(payload.runError, /git is unavailable|git is required/)
     }
+  })
+})
+
+test('update routes: a checkout update probes the launcher, because V1 needs it', async () => {
+  // Regression, and the reason it is its own test: the plan used to probe only
+  // the CLASSIFIED tool — `git` for a checkout move — so `launcher` stayed null,
+  // and `runPipeline`'s mandatory pre-check then refused EVERY local checkout
+  // update with "the dsh launcher is unavailable: no probe result". Measured live
+  // on a machine where `dsh` worked, which is what made it look like a missing
+  // tool rather than a missing probe.
+  //
+  // Deliberately no path comparison: the deployment's path spelling has its own
+  // test above, and this one has to keep asserting the DECISION on every platform.
+  await withDeployment(async () => {
+    const { routes, probes } = mountRealRoutes()
+    const res = fakeRes()
+    await routeFor(routes, 'plan').handler({ method: 'GET', url: '/?name=dsh-power&ref=v1.9.0' }, res)
+
+    const payload = JSON.parse(res.body)
+    assert.equal(payload.kind, 'checkout')
+    assert.ok(payload.needs.includes('dsh'), 'the pre-check needs the launcher, so the plan must declare it')
+    assert.ok(payload.tools.dsh !== null, 'and the probe must actually have run')
+    // The route projects a probe to `{available, path, error}`, so a boolean here
+    // is the evidence it ran: the unprobed shape is `null`, which is the state this
+    // regression is about.
+    assert.equal(typeof payload.tools.dsh.available, 'boolean', 'a probed launcher answers yes or no')
+    // Exactly once: the launcher is added to the classified needs, not duplicated.
+    assert.equal(payload.needs.filter((name) => name === 'dsh').length, 1)
   })
 })
 

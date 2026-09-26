@@ -278,6 +278,45 @@ export const CSS = `
    not a link inside a sentence. */
 a.pm-btn{display:inline-flex;align-items:center;text-decoration:none}
 
+/* ── Credentials ────────────────────────────────────────────────────────────
+   A source list is a STATUS list: the badge answers "yes or no" and the detail
+   line explains it, so nobody has to read a sentence to learn the answer. The
+   id column is fixed so six rows read as one column instead of six ragged
+   lines, and the token field is monospace because it holds a token, not prose. */
+.pm-cred-list{display:flex;flex-direction:column;gap:3px}
+.pm-cred-src{display:flex;align-items:baseline;gap:8px}
+.pm-cred-id{flex:0 0 92px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
+.pm-cred-badge{flex:0 0 48px;font-size:11px;font-weight:600}
+.pm-cred-badge-ok{color:var(--dsw-alias-state-success-primary,#1a7f37)}
+.pm-cred-badge-no{color:var(--dsw-alias-label-secondary,#656d76)}
+.pm-cred-badge-off{color:var(--dsw-alias-state-warn-primary,#9a6700)}
+.pm-cred-detail{flex:1 1 auto;min-width:0;font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
+.pm-cred-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.pm-cred-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pm-cred-token{flex:1 1 220px;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.pm-cred-off{display:flex;flex-wrap:wrap;gap:10px}
+.pm-cred-off label{display:inline-flex;align-items:center;gap:4px;font-size:11px}
+
+/* The method chooser. One row per method, and the row IS the control: a radio
+   whose whole surface is clickable, a name column that stays aligned, then the
+   state and the reason. The selected row is marked by a left rule rather than by
+   colour alone, so the choice survives a monochrome or high-contrast theme. */
+.pm-cred-choices{display:flex;flex-direction:column;gap:2px;padding:8px;border:1px solid var(--dsw-alias-border-l1,#d8dee4);border-radius:9px;background:var(--dsw-alias-bg-layer-1,#f6f8fa)}
+.pm-cred-choice-row{display:flex;align-items:baseline;gap:8px;padding:6px 8px;border-radius:6px;border-left:3px solid transparent;cursor:pointer;min-height:28px}
+.pm-cred-choice-row:hover{background:var(--dsw-alias-bg-layer-2,#eef1f4)}
+.pm-cred-on{border-left-color:var(--dsw-alias-brand-primary,#0969da);background:var(--dsw-alias-bg-base,#ffffff)}
+.pm-cred-choice-row input[type=radio]{flex:none;margin:0;cursor:pointer}
+.pm-cred-choice-name{flex:0 0 104px;font-size:11px;font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.pm-cred-choice-row:first-child .pm-cred-choice-name{font-family:inherit}
+
+/* A labelled field, not a placeholder doing a label's job. */
+.pm-cred-field{display:flex;flex-direction:column;gap:4px}
+.pm-cred-label{flex:0 0 auto;font-size:11px;font-weight:600}
+.pm-cred-help{font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
+/* The armed state of the one destructive control: it reads as a warning BEFORE
+   the second press, which is the whole point of arming it. */
+.pm-btn-danger{border-color:var(--dsw-alias-state-error-primary,#cf222e);color:var(--dsw-alias-state-error-primary,#cf222e);font-weight:600}
+
 /* Hover borders and the switch knob: both are motion, both stop when asked. */
 @media (prefers-reduced-motion: reduce){.pm-card,.pm-btn,.pm-switch,.pm-switch-knob{transition:none}}
 `

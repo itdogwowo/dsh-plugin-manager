@@ -121,6 +121,46 @@ test('host: dshBinCandidates walks up from argv[1] and never guesses a PATH name
   }
 })
 
+test('host: dshBinCandidates reaches a global install behind a PATH shim', () => {
+  // `dsh` on PATH is a symlink to the launcher, and Node does NOT resolve
+  // argv[1] through it — so the entry really is `/opt/homebrew/bin/dsh`. The
+  // launcher sits one `lib/` deeper than the old walk-up ever looked, which is
+  // why the probe reported "not found" on a machine where `dsh` works.
+  const candidates = dshBinCandidates('/opt/homebrew/bin/dsh')
+  assert.ok(candidates.includes('/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/lib/bin.js'))
+  for (const candidate of candidates) {
+    expectAbsolute(candidate)
+    // One file name like `\opt\homebrew\lib\…` is not a path on POSIX: it was
+    // the whole bug, and it made every candidate miss.
+    assert.ok(!candidate.includes('\\'), `mixed separator style: ${candidate}`)
+  }
+})
+
+test('host: dshBinCandidates finds the launcher from its own real path', () => {
+  const real = '/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/lib/bin.js'
+  const candidates = dshBinCandidates(real)
+  assert.ok(candidates.includes(real), 'the walk-up must be able to find itself')
+  for (const candidate of candidates) assert.ok(!candidate.includes('\\'), `mixed separator style: ${candidate}`)
+})
+
+test('host: dshBinCandidates still produces the Windows layout it always did', () => {
+  const entry = 'C:\\Users\\<account>\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js'
+  const candidates = dshBinCandidates(entry)
+  assert.ok(candidates.includes(entry), 'the npm-global layout must keep resolving')
+  for (const candidate of candidates) {
+    expectAbsolute(candidate)
+    assert.ok(!candidate.includes('/'), `mixed separator style: ${candidate}`)
+  }
+})
+
+test('host: dshBinCandidates refuses a bare name and a relative entry', () => {
+  // Both would resolve against whatever the cwd happens to be, i.e. to a
+  // different checkout on every machine. "No candidate" is the honest answer.
+  assert.deepEqual(dshBinCandidates('dsh'), [])
+  assert.deepEqual(dshBinCandidates('./node_modules/@deepseek-ai/dsh/lib/bin.js'), [])
+  assert.deepEqual(dshBinCandidates(null), [])
+})
+
 /** Assert a path is absolute in either style. */
 function expectAbsolute(path) {
   assert.ok(/^([A-Za-z]:[\\/]|[\\/])/.test(path), `not absolute: ${path}`)

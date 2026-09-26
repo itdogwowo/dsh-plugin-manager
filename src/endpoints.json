@@ -9,10 +9,12 @@
     "plan": "plan",
     "apply": "apply",
     "rollback": "rollback",
-    "toggle": "toggle"
+    "toggle": "toggle",
+    "settings": "settings",
+    "credentials": "credentials"
   },
   "method": "GET",
   "writeMethod": "POST",
-  "writeEndpoints": ["toggle", "remoteRefs", "apply", "rollback"],
-  "note": "apply and rollback change the profile and are the only routes that take a snapshot; toggle edits the user's cordis.patch.yml; remoteRefs is a POST because it is the one route that contacts the network, so it can never be reached by a GET, a prefetch or a page load"
+  "writeEndpoints": ["toggle", "remoteRefs", "apply", "rollback", "settings", "credentials"],
+  "note": "apply and rollback change the profile and are the only routes that take a snapshot; toggle edits the user's cordis.patch.yml; remoteRefs is a POST because it is the one route that contacts the network, so it can never be reached by a GET, a prefetch or a page load; settings and credentials also answer a GET, and their POST is what writes — to this plugin's own files under $DSH_HOME/.dsh-pm/, never to the host's settings service, $DSH_HOME/settings.yaml, or the user's cordis.patch.yml; credentials never returns a token on any method"
 }
