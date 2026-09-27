@@ -109,6 +109,9 @@ window.__ModuleLoader__.load({
         updateGroupRemoteVersions: '遠端版本（tag）',
         updateGroupRemoteBranches: '遠端分支',
         updateCurrent: '目前',
+        updateTypeTag: 'tag',
+        updateTypeBranch: '分支',
+        updateTypeRemote: '遠端',
         updateDetached: 'detached（不在任何分支上）',
         updateNewestTag: '最新 tag',
         updateNoRefs: '這個 checkout 讀不到任何 ref。',
@@ -332,6 +335,9 @@ window.__ModuleLoader__.load({
         updateGroupRemoteVersions: 'remote versions (tags)',
         updateGroupRemoteBranches: 'remote branches',
         updateCurrent: 'current',
+        updateTypeTag: 'tag',
+        updateTypeBranch: 'branch',
+        updateTypeRemote: 'remote',
         updateDetached: 'detached (on no branch)',
         updateNewestTag: 'newest tag',
         updateNoRefs: 'No ref could be read from this checkout.',
@@ -1444,12 +1450,26 @@ window.__ModuleLoader__.load({
           for (const group of groups) {
             const rows = []
             for (const item of group.items) {
+              // A row answers three questions at a glance: WHICH ref, what KIND, and
+              // WHERE it sits — the last one as a short commit, because a repository
+              // without tags has no other version to show (this one is such a
+              // repository). The arrow is the position marker: exactly one row is where
+              // the checkout actually is, and an unmarked list leaves the reader
+              // comparing hashes by eye.
               const marks = []
-              if (item.current === true) marks.push(t('updateCurrent'))
               if (newestTag !== null && item.name === newestTag) marks.push(t('updateNewestTag'))
-              rows.push(
-                h('option', { key: item.value, value: item.value }, marks.length === 0 ? item.name : `${item.name} · ${marks.join(' · ')}`),
-              )
+              const commit = typeof item.peeled === 'string' && item.peeled.length > 0 ? item.peeled : item.commit
+              const short = typeof commit === 'string' && commit.length >= 8 ? commit.slice(0, 8) : null
+              // Literal lookups rather than a computed key: the dead-copy scan is
+              // static, and `t(group.typeKey)` would make these three read as unused.
+              const typeLabel =
+                group.key === 'updateGroupRemoteBranches'
+                  ? t('updateTypeRemote')
+                  : group.key === 'updateGroupLocalBranches'
+                    ? t('updateTypeBranch')
+                    : t('updateTypeTag')
+              const parts = [`${item.current === true ? '→ ' : ''}${item.name}`, typeLabel, short, item.current === true ? t('updateCurrent') : null, ...marks]
+              rows.push(h('option', { key: item.value, value: item.value }, parts.filter((part) => part !== null && part !== undefined && part !== '').join(' · ')))
             }
             options.push(h('optgroup', { key: group.key, label: t(group.key) }, rows))
           }

@@ -312,12 +312,26 @@ export function createUpdatePanel(react) {
     for (const group of groups) {
       const rows = []
       for (const item of group.items) {
+        // A row answers three questions at a glance: WHICH ref, what KIND, and
+        // WHERE it sits — the last one as a short commit, because a repository
+        // without tags has no other version to show (this one is such a
+        // repository). The arrow is the position marker: exactly one row is where
+        // the checkout actually is, and an unmarked list leaves the reader
+        // comparing hashes by eye.
         const marks = []
-        if (item.current === true) marks.push(t('updateCurrent'))
         if (newestTag !== null && item.name === newestTag) marks.push(t('updateNewestTag'))
-        rows.push(
-          h('option', { key: item.value, value: item.value }, marks.length === 0 ? item.name : `${item.name} · ${marks.join(' · ')}`),
-        )
+        const commit = typeof item.peeled === 'string' && item.peeled.length > 0 ? item.peeled : item.commit
+        const short = typeof commit === 'string' && commit.length >= 8 ? commit.slice(0, 8) : null
+        // Literal lookups rather than a computed key: the dead-copy scan is
+        // static, and `t(group.typeKey)` would make these three read as unused.
+        const typeLabel =
+          group.key === 'updateGroupRemoteBranches'
+            ? t('updateTypeRemote')
+            : group.key === 'updateGroupLocalBranches'
+              ? t('updateTypeBranch')
+              : t('updateTypeTag')
+        const parts = [`${item.current === true ? '→ ' : ''}${item.name}`, typeLabel, short, item.current === true ? t('updateCurrent') : null, ...marks]
+        rows.push(h('option', { key: item.value, value: item.value }, parts.filter((part) => part !== null && part !== undefined && part !== '').join(' · ')))
       }
       options.push(h('optgroup', { key: group.key, label: t(group.key) }, rows))
     }
