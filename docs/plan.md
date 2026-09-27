@@ -616,6 +616,7 @@ dsh-plugin-manager@https://codeload.github.com/.../tar.gz/9ada4ba...:
 |---|---|---|
 | `pipeline.mjs` 是所有變更的唯一路徑 | 🟢 | `apply` 路由只有三條出口，全部經過 `runPipeline`；`test/pipeline.test.mjs` |
 | 故意裝壞 → 自動回滾 → 狀態逐位元一致 | 🟢 **以真子進程驗過** | 假 launcher 真的把 `package.json` 寫壞 → 驗證失敗 → 回滾 → 檔案與變更前**逐位元組相同** |
+| 快照／回滾被**沙箱**拒絕時，講清楚是哪一道柵欄 | 🟢 | 快照與回滾各自回報 `denied`（`snapshot.js`）、面板標題走既有的「寫入被拒」；判準集中在 `host.js` 的 `isSandboxDenial`（`patch-writer.js` 改用同一個，消掉第二份 regex）。⚠️ **宿主事實**：面板的 fs 寫入**不帶 session**，所以 `sandboxPolicy.resolve()` 走**部署預設**（`DSH_PERMISSION_MODE`，未設＝`workspace-write`）＋宿主 `process.cwd()` 當可寫根——**對話的存取 preset（session 的 `sandbox/mode` 事件）對它無效**。因此 `workspace-write` 下這條管線**不可能成功**：快照在 `$DSH_HOME/.dsh-pm/`、回滾要寫回 `$DSH_HOME/profiles/`，兩者都在可寫根之外。 |
 | 中斷恢復（kill 之後偵測未完成管道） | 🔴 **未做** | `log.jsonl` 的 started/finished 協定還沒寫；目前只有快照本身留下 |
 | 更新時選版本／分支 | 🟢 | 本機 ref 列舉有測試（含 packed-refs、annotated tag、detached HEAD） |
 | 遠端 ref 查詢 | 🟡 | 解析與失敗語意有測試；**真實 API 呼叫未在宿主內跑過** |

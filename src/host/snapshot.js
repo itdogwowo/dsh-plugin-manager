@@ -32,7 +32,7 @@
  * R1 applies: `node:` and relative imports only.
  */
 
-import { joinPath, parentPath, removeFile } from './host.js'
+import { isSandboxDenial, joinPath, parentPath, removeFile } from './host.js'
 
 /** State files a snapshot records, in the order they are restored. */
 export const SNAPSHOT_FILES = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml']
@@ -176,6 +176,9 @@ export async function takeSnapshot(fs, input) {
     profileName,
     files: [],
     digests: {},
+    // A refusal is its own outcome, not a flavour of failure: it is the one
+    // storage answer that names something the user can change (see below).
+    denied: false,
     error: null,
   }
 
@@ -222,7 +225,29 @@ export async function takeSnapshot(fs, input) {
       await fs.writeText(await fs.resolve(joinPath(out.dir, 'files', fileNameOf(record.path))), record.content)
     }
   } catch (error) {
-    out.error = `the snapshot could not be stored at ${out.dir}: ${error instanceof Error ? error.message : String(error)}`
+    const message = error instanceof Error ? error.message : String(error)
+    // A refusal from the deployment's file sandbox is reported AS a refusal, in
+    // its own words and under its own flag, because it is the only storage
+    // failure whose cause is a decision the reader can revisit. Dressing it up
+    // as "could not be stored" sends the reader looking at their disk.
+    //
+    // Three facts the sentence has to get right, because all three are
+    // counter-intuitive:
+    //   - the fenced step is the snapshot, but the ROLLBACK writes the same
+    //     profile files back, so there is no version of this pipeline that works
+    //     without write access to that path — hence "nothing was changed"
+    //     rather than a suggestion to retry;
+    //   - the check is per CALL, and these writes carry no session, so they
+    //     answer to the DEPLOYMENT default with the host's own start directory
+    //     as the writable root — a conversation's access preset does not reach
+    //     here, and saying otherwise would send the reader to a knob that does
+    //     nothing;
+    //   - widening it is a deployment decision (it applies to every session-less
+    //     call of that host), NOT something this package does for itself.
+    out.denied = isSandboxDenial(error)
+    out.error = out.denied
+      ? `the snapshot could not be stored at ${out.dir}: ${message}. The DSH file sandbox refused this write, and the snapshot is the step that may not be skipped — a rollback writes the same profile files back — so nothing was changed and there is nothing to undo. This panel's writes carry no session, so they answer to the deployment default (DSH_PERMISSION_MODE, else workspace-write) with the host's start directory as the writable root; a conversation's access preset does not change it. Widening that default is a deployment decision, and this package never asks for a wider mode of its own.`
+      : `the snapshot could not be stored at ${out.dir}: ${message}`
     return out
   }
 
@@ -256,6 +281,9 @@ export async function restoreSnapshot(input) {
     residue: [],
     verified: [],
     mismatched: [],
+    // Set when the sandbox refused a restore: the loud version of a partial
+    // rollback, which is the only acceptable version of one.
+    denied: false,
     error: null,
   }
 
@@ -285,7 +313,15 @@ export async function restoreSnapshot(input) {
       await fs.writeText(await fs.resolve(record.path), record.content)
       out.restored.push(record.path)
     } catch (error) {
-      out.error = `${record.path} could not be restored: ${error instanceof Error ? error.message : String(error)}`
+      const message = error instanceof Error ? error.message : String(error)
+      // A refused restore leaves the profile in the state the failed change left
+      // it, and the remaining files are NOT restored — this returns immediately.
+      // Saying so is the whole point: a partial rollback that reports success is
+      // worse than one that reports itself.
+      out.denied = isSandboxDenial(error)
+      out.error = out.denied
+        ? `${record.path} could not be restored: ${message}. The DSH file sandbox refused the restore, so the profile is left in the state the failed change left it: the files after this one were not restored either, and \`residue\` lists what to look at by hand.`
+        : `${record.path} could not be restored: ${message}`
       return out
     }
   }
@@ -324,6 +360,9 @@ export function describeSnapshot(snapshot) {
     action: snapshot?.action ?? null,
     detail: snapshot?.detail ?? null,
     dir: snapshot?.dir ?? null,
+    // Carried into the run record so the panel can title the outcome "write
+    // refused" instead of "install failed" — a refusal is not a failed change.
+    denied: snapshot?.denied === true,
     files: Array.isArray(snapshot?.files)
       ? snapshot.files.map((record) => ({ path: record.path, present: record.present === true, digest: record.digest, bytes: record.bytes }))
       : [],

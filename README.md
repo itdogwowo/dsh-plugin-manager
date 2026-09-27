@@ -139,6 +139,15 @@ git／tarball 來源的插件（本機 profile 裡就有）拿不到版本比對
   `pnpm-workspace.yaml`、`cordis.patch.yml`），**不是整個 `node_modules`**。
   安裝樹由 lockfile 決定，回滾後由官方 CLI 對帳；回滾當下動不了的殘留會被**列出來**，
   不會被靜默忽略。
+- **變更管道需要 `$DSH_HOME` 的寫入權限。** 快照存在 `$DSH_HOME/.dsh-pm/`，而回滾要把
+  profile 的狀態檔**寫回去**——兩個路徑都在 session workspace **之外**。所以當宿主的檔案權限是
+  `workspace-write`（`DSH_PERMISSION_MODE` 未設時的部署預設）時，面板的安裝／更新／移除會
+  **在第一步就拒絕**：快照寫不進去，變更不會開始（刻意的 fail-closed，不是壞掉）。
+  ⚠️ 面板的寫入**不帶 session**，判準是**部署預設 ＋ 宿主啟動目錄**，所以**對話的存取權限
+  preset 對它無效**（那個只影響該 session 的工具呼叫）。要讓管線跑起來只能由部署層放寬
+  （`DSH_PERMISSION_MODE=danger-full-access`，或部署 config 的 `sandbox-policy.mode`）並重啟
+  `dsh web`；本插件**不會**替自己要求更寬的模式。官方 CLI 不經過管線，因此不受這道柵欄影響
+  ——代價是沒有快照、不會自動回滾。
 - **移動本地 git checkout 需要 `git` 執行檔**，而參考機器上沒有。
   這個功能會明說缺什麼、給你該平台的安裝指令與官方連結，但**不會**替你安裝。
   在那之前，本地 checkout 的更新只能走替代做法（改來源為 `github:<owner>/<repo>#<ref>`）。

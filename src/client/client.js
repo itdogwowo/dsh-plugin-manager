@@ -2320,7 +2320,10 @@ window.__ModuleLoader__.load({
                   })
                 : h(Notice, {
                     bad: true,
-                    title: t('installResultFailed'),
+                    // A sandbox refusal is not a failed install: nothing was attempted.
+                    // The host sends the flag (and the sentence explaining which knob
+                    // governs it), so the title must not claim the pipeline ran.
+                    title: props.result.denied === true ? t('writeRefused') : t('installResultFailed'),
                     body: h(
                       'div',
                       null,

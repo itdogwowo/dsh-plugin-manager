@@ -591,6 +591,29 @@ export function looksLikeVersion(text) {
 }
 
 /**
+ * Whether a file-service failure is the deployment's sandbox saying NO, rather
+ * than the disk saying no.
+ *
+ * The two are different answers and must never be reported alike: "disk full" is
+ * a broken machine, a refusal is a POLICY someone set, and only the second one
+ * has a knob a human can turn. The marker is what `dsh-fs-sandbox` renders —
+ * `FS_SANDBOX_DENIED`, surfaced to callers as "file access denied under <mode>
+ * mode" — and reading it in one place keeps that host assumption in one place
+ * (R7).
+ *
+ * ⚠️ This is a MATCHER, not a policy check. This package never reads the sandbox
+ * policy and never asks for a wider mode: a refusal is REPORTED, never worked
+ * around (`docs/plan.md` §7.3).
+ *
+ * @param {unknown} error - a thrown value from the fs service.
+ * @returns {boolean} true when the sandbox refused the call.
+ */
+export function isSandboxDenial(error) {
+  const message = error instanceof Error ? error.message : String(error)
+  return /FS_SANDBOX_DENIED|denied/i.test(message)
+}
+
+/**
  * Delete one file through whichever authority can do it.
  *
  * The `fs` service can read, write and edit — it has NO delete method, so a

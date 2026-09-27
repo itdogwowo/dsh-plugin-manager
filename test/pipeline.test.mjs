@@ -425,6 +425,48 @@ test('snapshot: a snapshot that cannot be stored FAILS instead of warning', asyn
     const snapshot = await takeSnapshot(brokenFs, { profileDir, profileName: 'web', label: 'doomed' })
     assert.equal(snapshot.ok, false)
     assert.match(snapshot.error, /could not be stored/)
+    // A full disk is NOT a sandbox refusal: it must not borrow the words (or the
+    // suggested knob) that belong to a policy answer.
+    assert.equal(snapshot.denied, false)
+    assert.doesNotMatch(snapshot.error, /sandbox/)
+  })
+})
+
+test('snapshot: a sandbox refusal is reported as a refusal, with the knob that governs it', async () => {
+  const fencedFs = { ...realFs(), writeText: async () => { throw new Error('file access denied under workspace-write mode') } }
+  await withProfile({ modules: ['pkg'] }, async ({ profileDir }) => {
+    const snapshot = await takeSnapshot(fencedFs, { profileDir, profileName: 'web', label: 'doomed' })
+
+    assert.equal(snapshot.ok, false)
+    assert.equal(snapshot.denied, true)
+
+    // These three sentences are the whole value of the message, because each one
+    // is something the reader would otherwise get wrong: that nothing was
+    // changed (a rollback writes the same path, so retrying cannot help), that
+    // the governing knob is the deployment default and NOT a conversation's
+    // access preset (these writes carry no session), and that this package
+    // reports a refusal instead of asking for a wider mode.
+    assert.match(snapshot.error, /file sandbox refused this write/)
+    assert.match(snapshot.error, /rollback writes the same profile files back/)
+    assert.match(snapshot.error, /nothing was changed/)
+    assert.match(snapshot.error, /DSH_PERMISSION_MODE/)
+    assert.match(snapshot.error, /access preset does not change it/)
+    assert.match(snapshot.error, /never asks for a wider mode/)
+  })
+})
+
+test('snapshot: a restore the sandbox refuses says the profile was left as the change left it', async () => {
+  await withProfile({ modules: ['pkg'] }, async ({ profileDir }) => {
+    const snapshot = await takeSnapshot(fs, { profileDir, profileName: 'web', label: 'ok' })
+    const fencedFs = { ...realFs(), writeText: async () => { throw new Error('file access denied under workspace-write mode') } }
+
+    const result = await restoreSnapshot({ fs: fencedFs, subprocess, snapshot })
+
+    assert.equal(result.ok, false)
+    assert.equal(result.denied, true)
+    assert.match(result.error, /refused the restore/)
+    // The loud version of a partial rollback, which is the only acceptable one.
+    assert.match(result.error, /left in the state the failed change left it/)
   })
 })
 
@@ -432,6 +474,36 @@ test('snapshot: restoring with no usable snapshot refuses rather than half-doing
   const result = await restoreSnapshot({ fs, subprocess, snapshot: { ok: false } })
   assert.equal(result.ok, false)
   assert.match(result.error, /no usable snapshot/)
+})
+
+test('pipeline: a snapshot the sandbox refused means the change never ran at all', async () => {
+  const fencedFs = { ...realFs(), writeText: async () => { throw new Error('file access denied under workspace-write mode') } }
+  await withProfile({ modules: ['pkg'] }, async ({ profileDir }) => {
+    // A "change" that would leave a trace if it ever started.
+    const marker = join(profileDir, 'ran.txt')
+    put(profileDir, 'dirty.js', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')\n`)
+
+    const run = await runPipeline({
+      fs: fencedFs,
+      subprocess,
+      launcher: { available: true, path: join(profileDir, 'dirty.js'), error: null },
+      git: { available: false, error: 'no git' },
+      selfName: 'dsh-plugin-manager',
+      profileDir,
+      profileName: 'web',
+      noVerify: true,
+      argv: ['dsh', 'plugin', '--profile', 'web', 'add', 'pkg'],
+      label: 'add pkg',
+    })
+
+    assert.equal(run.ok, false)
+    // The flag the panel titles "write refused": nothing was attempted, and
+    // "install failed" would claim otherwise.
+    assert.equal(run.denied, true)
+    assert.equal(run.snapshot.denied, true)
+    assert.equal(existsSync(marker), false, 'the refused change must not have started')
+    assert.equal(run.rollback, null, 'there was nothing to roll back, and the panel says so')
+  })
 })
 
 test('pipeline: a change whose post-check FAILS is rolled back, byte for byte', async () => {

@@ -1433,6 +1433,24 @@ test('install field: a rolled-back run says so, and lists what was left behind',
   assert.match(text, /node_modules\/some-plugin/)
 })
 
+test('install field: a sandbox refusal is titled as a refusal, not as a failed install', async () => {
+  const tree = await renderInstall(
+    null,
+    {
+      ok: false,
+      denied: true,
+      spec: 'some-plugin',
+      error: 'the snapshot failed, so the change was NOT started: … the DSH file sandbox refused this write …',
+      rollback: null,
+    },
+    '',
+  )
+  const text = JSON.stringify(tree)
+  // Nothing was attempted, so "install failed" would be a lie about what ran.
+  assert.match(text, /writeRefused/)
+  assert.doesNotMatch(text, /installResultFailed/)
+})
+
 // ── The credential section ──────────────────────────────────────────────────
 //
 // The section is its own component with its own hook sequence, and these tests

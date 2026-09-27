@@ -34,6 +34,7 @@
 
 import { join } from 'node:path'
 import { parsePatchEntries } from './enabled.js'
+import { isSandboxDenial } from './host.js'
 
 /** The user patch file's header, copied from what the deployment itself writes. */
 const HEADER = [
@@ -195,7 +196,7 @@ export async function setEnabled(fs, profileDir, request) {
     await fs.writeText(await fs.resolve(path), built.text)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    out.denied = /denied|FS_SANDBOX_DENIED/i.test(message)
+    out.denied = isSandboxDenial(error)
     out.error = out.denied
       ? `the write was refused by the sandbox (${message}). The patch file lives outside this session's writable root; nothing was changed.`
       : message

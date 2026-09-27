@@ -680,6 +680,10 @@ export async function runPipeline(input) {
     changed: null,
     residue: [],
     elapsedMs: 0,
+    // A change the sandbox refused to snapshot never started, and the panel
+    // reports that as a refusal rather than as a failure (same flag, same
+    // wording, as the patch writer's).
+    denied: false,
     error: null,
     warnings: [],
   }
@@ -735,6 +739,12 @@ export async function runPipeline(input) {
   out.snapshot = describeSnapshot(snapshot)
   out.steps.push({ step: 'snapshot', status: snapshot.ok ? 'ok' : 'fail', note: snapshot.dir })
   if (snapshot.ok !== true) {
+    // A refusal is not a failed change: it is a change that was never allowed to
+    // start. The flag travels to the panel so the outcome is titled "write
+    // refused" — the same treatment `patch-writer.js` refusals already get —
+    // and the explanation lives in `snapshot.error`, where the path and the
+    // fence that refused it are known.
+    out.denied = snapshot.denied === true
     out.error = `the snapshot failed, so the change was NOT started: ${snapshot.error}`
     out.elapsedMs = Date.now() - started
     return out
