@@ -57,12 +57,11 @@ export function createUpdatePanel(react) {
     const remoteTags = remote !== null && remote !== undefined && remote.ok === true && Array.isArray(remote.tags) ? remote.tags : []
     const remoteBranches = remote !== null && remote !== undefined && remote.ok === true && Array.isArray(remote.branches) ? remote.branches : []
 
-    // A remote ref that is already known locally is shown as the REMOTE one: the
-    // point of asking the remote is to learn about things this machine lacks, and
-    // a name appearing twice would make the picker look like it had more choices.
-    const seen = new Set()
-    for (const item of remoteTags) seen.add(`tag:${item.name}`)
-    for (const item of remoteBranches) seen.add(`branch:${item.name}`)
+    // A name may legitimately appear twice — once as a local branch and once as
+    // the remote's — and both rows are KEPT: the point of asking the remote is to
+    // learn where it is, and with a commit on every row the two are no longer
+    // confusable. (A `seen` set used to sit here claiming the duplicate was
+    // collapsed; nothing read it, and the claim was not true.)
 
     if (localTags.length > 0) groups.push({ key: 'updateGroupLocalVersions', items: localTags.map((item) => ({ ...item, value: `tag:${item.name}`, name: item.name })) })
     if (localBranches.length > 0) groups.push({ key: 'updateGroupLocalBranches', items: localBranches.map((item) => ({ ...item, value: `branch:${item.name}`, name: item.name })) })
