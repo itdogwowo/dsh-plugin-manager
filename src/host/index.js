@@ -82,7 +82,12 @@ function applyImpl(ctx) {
   Promise.resolve()
     .then(async () => {
       const launcher = await probeDshLauncher(fs)
-      const git = await probeGit(ctx.subprocess, fs)
+      // `ctx.get`, never `ctx.subprocess`. A service that is not in `inject` is
+      // not reachable as a property: cordis throws `cannot get property
+      // "subprocess" without inject`, which is what a real deployment logged
+      // here — the whole probe died inside this fire-and-forget promise, taking
+      // the `tools:` line with it. `verify.mjs` now refuses the shape (R2).
+      const git = await probeGit(ctx.get('subprocess'), fs)
       console.log(
         `[${PACKAGE_NAME}] tools: ${describeProbe('dsh', launcher)} ${describeProbe('git', git)}` +
           (launcher.available === true ? '' : ` (tried ${launcher.tried.length} location(s))`) +

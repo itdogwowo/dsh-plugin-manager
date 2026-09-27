@@ -481,6 +481,22 @@ function readCollected(handle, name) {
  * @returns {Promise<{ available: boolean, path: string|null, version: string|null, tried: string[], error: string|null }>} the probe.
  */
 export async function probeGit(subprocess, fs) {
+  // A missing SERVICE is not a missing TOOL, and the difference is the whole
+  // message. Without this guard the loop below asks `resolveTool` about every
+  // candidate, gets `null` from each (that is what a missing service looks like
+  // from there), and reports "git was not found on PATH or under any known
+  // install root" — a confident claim about the user's machine that this probe
+  // never actually checked.
+  if (subprocess === undefined || subprocess === null || typeof subprocess.resolveExecutable !== 'function') {
+    return {
+      available: false,
+      path: null,
+      version: null,
+      tried: [],
+      error: 'this deployment exposes no `subprocess` service, so git cannot be probed at all — a deployment fact, not a missing install',
+    }
+  }
+
   const tried = []
   const candidates = [...GIT_CANDIDATES, ...GIT_INSTALL_ROOTS]
 

@@ -262,6 +262,20 @@ test('host: probeGit does not throw on a machine without git, and says what it t
   }
 })
 
+test('host: a deployment WITHOUT the subprocess service is not reported as "git is missing"', async () => {
+  // The distinction is the whole message. `resolveTool` answers null for every
+  // candidate when there is no service to ask, so the loop would conclude "git
+  // was not found on PATH or under any known install root" — a claim about the
+  // user's machine that this probe never actually checked.
+  for (const missing of [undefined, null, {}]) {
+    const probe = await probeGit(missing, realFs())
+    assert.equal(probe.available, false)
+    assert.equal(probe.tried.length, 0, 'nothing could be tried, so nothing may be listed as tried')
+    assert.match(probe.error, /no `subprocess` service/)
+    assert.doesNotMatch(probe.error, /git was not found/)
+  }
+})
+
 test('host: base64 matches the runtime encoder for text, including non-ASCII', () => {
   for (const sample of ['', 'a', 'ab', 'abc', 'a/b?c=d', '路徑 C:\\x y\\z', '🔌']) {
     assert.equal(base64(sample), Buffer.from(sample, 'utf8').toString('base64'), `mismatch for ${JSON.stringify(sample)}`)

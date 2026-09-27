@@ -306,6 +306,86 @@ function hostImportAllowed(specifier) {
   return false
 }
 
+/**
+ * The services an entry declares in `inject`, read from its own source.
+ *
+ * The list is PARSED rather than restated here on purpose: a second copy of
+ * "what this half injects" is the thing that goes stale, and the check below
+ * would then bless a property access the host would refuse at runtime.
+ *
+ * @param {string} source - the entry file's text.
+ * @returns {string[]} the injected service names (empty when there is no `inject`).
+ */
+export function injectedServices(source) {
+  const match = /export\s+const\s+inject\s*=\s*\[([^\]]*)\]/.exec(source)
+  if (match === null) return []
+  return [...match[1].matchAll(/['"]([^'"]+)['"]/g)].map((entry) => entry[1])
+}
+
+/**
+ * Members of the cordis context that are API, not services.
+ *
+ * Deliberately explicit: a new member has to be added by hand, which is the
+ * point — the check's job is to make "is this a service?" a question someone
+ * answers, not something the regex guesses.
+ */
+export const CONTEXT_API_MEMBERS = [
+  'get',
+  'set',
+  'provide',
+  'effect',
+  'on',
+  'once',
+  'emit',
+  'parallel',
+  'waterfall',
+  'bail',
+  'scope',
+  'isolate',
+  'logger',
+  'inject',
+  'plugin',
+  'registry',
+  'root',
+  'dispose',
+  'start',
+  'stop',
+  'state',
+]
+
+/**
+ * `ctx.<name>` property accesses that a host half may NOT make.
+ *
+ * R2 says `webServer` is the only service this half depends on and that every
+ * other one is read with `ctx.get(...)` so its absence degrades instead of
+ * holding up boot. Cordis enforces the other side of that: a service not in
+ * `inject` is unreachable as a property — it throws `cannot get property "x"
+ * without inject`.
+ *
+ * That throw SHIPPED, on the tool probe, inside a fire-and-forget promise: the
+ * deployment printed `tool probe failed` and lost the probe line with it. Hence
+ * a static rule rather than a comment.
+ *
+ * @param {string} source - one host file's text.
+ * @param {string[]} injected - the names in the entry's `inject`.
+ * @param {string[]} [allowed] - context API members, overridable for tests.
+ * @returns {{ name: string, line: number }[]} the violations, in file order.
+ */
+export function contextServiceViolations(source, injected, allowed = CONTEXT_API_MEMBERS) {
+  const ok = new Set([...(Array.isArray(injected) ? injected : []), ...allowed])
+  const lines = blankCommentsAndStrings(source).split('\n')
+  const out = []
+  for (let index = 0; index < lines.length; index += 1) {
+    const pattern = /\bctx\s*\??\.\s*([A-Za-z_$][\w$]*)/g
+    let match = pattern.exec(lines[index])
+    while (match !== null) {
+      if (!ok.has(match[1])) out.push({ name: match[1], line: index + 1 })
+      match = pattern.exec(lines[index])
+    }
+  }
+  return out
+}
+
 // ── R1: host half imports only node: and relative paths ──────────────────────
 
 for (const path of walk(HOST_DIR)) {
@@ -335,6 +415,46 @@ for (const path of walk(HOST_DIR)) {
     if (pattern.test(bare)) {
       fail('R3', rel, 0, `host half touches the "${service}" service (a known startup-hang source)`)
     }
+  }
+}
+
+// ── R2: every OTHER service is read with ctx.get, never as a property ────────
+//
+// The injected list comes from the entry file itself, so the two can never
+// disagree. See `contextServiceViolations` for the deployment this caught.
+
+const HOST_ENTRY = join(HOST_DIR, 'index.js')
+const INJECTED_SERVICES = injectedServices(read(HOST_ENTRY))
+if (INJECTED_SERVICES.length === 0) {
+  fail('R2', relative(ROOT, HOST_ENTRY), 0, 'the entry declares no `inject` list, so this check cannot tell a service from an API member')
+}
+for (const path of walk(HOST_DIR)) {
+  if (extname(path) !== '.js') continue
+  const rel = relative(ROOT, path)
+  for (const violation of contextServiceViolations(read(path), INJECTED_SERVICES)) {
+    fail(
+      'R2',
+      rel,
+      violation.line,
+      `ctx.${violation.name} reads a service as a property, but \`inject\` declares only ${INJECTED_SERVICES.map((name) => `"${name}"`).join(', ')} — cordis throws "cannot get property \\"${violation.name}\\" without inject"; use ctx.get('${violation.name}')`,
+    )
+  }
+}
+
+// The checker's own behaviour is asserted HERE, not in test/, because this file
+// exits the process and cannot be imported by a test — and a matcher that
+// quietly stopped matching would turn R2 into decoration.
+
+for (const fixture of [
+  { source: 'const git = await probeGit(ctx.subprocess, fs)\n', expect: ['subprocess'], why: 'the shape that shipped' },
+  { source: 'const x = ctx?.fs\n', expect: ['fs'], why: 'optional chaining is the same read' },
+  { source: 'ctx.webServer.register({})\n', expect: [], why: 'injected, so a property read is legal' },
+  { source: "const fs = ctx.get('fs')\nctx.effect(() => {}, 'x')\n", expect: [], why: 'the API members' },
+  { source: '// ctx.subprocess in a comment\nconst s = "ctx.fs"\n', expect: [], why: 'comments and strings are not code' },
+]) {
+  const got = contextServiceViolations(fixture.source, INJECTED_SERVICES).map((entry) => entry.name)
+  if (got.join(',') !== fixture.expect.join(',')) {
+    fail('R2', 'verify.mjs', 0, `the ctx-property checker is broken (${fixture.why}): expected [${fixture.expect.join(', ')}], got [${got.join(', ')}]`)
   }
 }
 
