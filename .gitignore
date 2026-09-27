@@ -8,3 +8,13 @@
 .probe-*.mjs
 .probe-*.js
 *.tmp
+
+# 憑證永遠不進公開 repo。
+#
+# 插件自己的 store 與它交給 git 的暫存檔都放在 `$DSH_HOME/.dsh-pm/`——那在
+# **這個工作樹之外**，git 根本看不到，所以下面這些不是它們的防線，而是
+# **第二道**：萬一未來的改動把某個憑證檔寫進 repo，這裡讓 `git add` 直接拒絕，
+# 而 `verify.mjs` 的憑證形狀掃描則讓建置失敗。兩道都刻意冗餘。
+credentials.json
+git-credentials*
+*.credentials
