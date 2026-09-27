@@ -1602,6 +1602,32 @@ test('credentials: the token field has a visible label and a reveal toggle', asy
   assert.equal(buttonByLabel(mounted.current(), 'T:credTokenHide').props['aria-pressed'], true)
 })
 
+test('credentials: the section is folded shut until a credential exists', async () => {
+  // Reading a public repository needs no credential, so for a public-only setup
+  // this whole section is something the user never opens. The summary therefore
+  // has to read as a complete sentence on its own.
+  const folded = await withCredentials({ credentialStatus: () => Promise.resolve(credentialsPayload()) })
+  const fold = findByClass(folded.current(), 'pm-cred-fold')[0]
+  assert.equal(fold.props.open, false, 'a public-only setup never has to open this')
+  assert.match(textOf(fold.children[0].children).join(''), /T:credSummaryNotNeeded/)
+  // Folded, not emptied: every control is still in the tree, which is what keeps
+  // the other tests in this file honest.
+  assert.equal(findByClass(folded.current(), 'pm-cred-choice-row').length, 4)
+  assert.equal(findByClass(folded.current(), 'pm-cred-token').length, 1)
+
+  // A stored secret is NOT hidden behind a fold: that would be its own small lie.
+  await renderPanel(withPlugins([pluginRow({ name: 'cred-tool' })]), { renders: 1 })
+  const stored = await mountCredentials({
+    credentialStatus: () =>
+      Promise.resolve(
+        credentialsPayload({ store: { ...credentialsPayload().store, exists: true, saved: true, mode: 0o600, modeSafe: true, hint: 'ghp_••••••cret' } }),
+      ),
+  })
+  const openFold = findByClass(stored.current(), 'pm-cred-fold')[0]
+  assert.equal(openFold.props.open, true, 'the user can always see and clear their own secret')
+  assert.match(textOf(openFold.children[0].children).join(''), /T:credSummarySet/)
+})
+
 test('credentials: a token in the payload must never reach the tree', async () => {
   // The host promises it never sends one. This asserts the PANEL would not render
   // it even if that promise broke, because the panel is the half a user can see.

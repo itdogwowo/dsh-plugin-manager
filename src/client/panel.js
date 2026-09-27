@@ -1058,6 +1058,22 @@ export function createPanel(react, makeUpdatePanel) {
     return h(
       Section,
       { title: t('sectionCredentials') },
+      // Folded shut by default, and the summary states the truth in one line:
+      // reading a PUBLIC repository needs no credential at all, so for a
+      // public-only setup this whole section is something the user never has to
+      // open. It unfolds itself only when a token has actually been stored —
+      // hiding the user's own secret behind a fold would be its own small lie.
+      //
+      // A plain `<details>` and not a state hook: the open/closed state is a
+      // browser concern, and the content stays in the tree either way, so the
+      // render tests keep seeing every control they assert on.
+      h(
+        'details',
+        { className: 'pm-disclosure pm-cred-fold', open: store !== null && store.exists === true },
+        h('summary', null, store !== null && store.exists === true ? t('credSummarySet') : t('credSummaryNotNeeded')),
+        h(
+          'div',
+          { className: 'pm-cred-body' },
       h('div', { className: 'pm-sec-note' }, t('credIntro')),
       state.phase === 'loading' ? h('div', { className: 'pm-sec-note' }, t('reading')) : null,
       state.phase === 'error' ? h(Notice, { bad: true, title: t('failed'), body: String(state.error) }) : null,
@@ -1089,6 +1105,8 @@ export function createPanel(react, makeUpdatePanel) {
           'button',
           { className: 'pm-btn pm-btn-sm', type: 'button', disabled: state.phase === 'loading', onClick: refresh },
           state.phase === 'loading' ? t('reading') : t('refresh'),
+        ),
+      ),
         ),
       ),
     )

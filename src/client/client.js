@@ -225,6 +225,8 @@ window.__ModuleLoader__.load({
         // The section states one thing above the list: where a token may come from and
         // what the panel is allowed to know about it. Everything else is status.
         sectionCredentials: '認證來源',
+        credSummaryNotNeeded: '目前不需要憑證——讀公開 repo 不需要，只有私有 repo 或 API 限流才要。',
+        credSummarySet: '已設定憑證（面板只拿得到遮罩後綴）。',
         credIntro: '查遠端、更新私有 repo 需要 token。插件只問你自己提供的來源（面板輸入／插件 store／環境變數／gh），下面是實際狀態——面板只拿得到來源、可用性與遮罩後綴，拿不到 token 本身。需要認證的 git 操作另有代辦一途（預設關閉，可在設定開啟）。',
         credHost: '主機',
         credStore: 'store 檔',
@@ -443,6 +445,8 @@ window.__ModuleLoader__.load({
         statThirdPartyLoaded: 'loaded',
       
         sectionCredentials: 'Credentials',
+        credSummaryNotNeeded: 'No credential is needed right now — reading a public repository needs none; only a private remote or the API rate limit does.',
+        credSummarySet: 'A credential is stored (the panel only ever sees a masked hint).',
         credIntro: 'Fetching remotes and updating private repositories need a token. The plugin only asks sources you supplied yourself (panel input, this plugin’s own store, an environment variable, gh); this is what actually happens. The panel receives a source, its availability and a masked hint — never the token itself. Authenticated git operations have a separate delegated route, off by default.',
         credHost: 'host',
         credStore: 'store file',
@@ -799,6 +803,11 @@ window.__ModuleLoader__.load({
       .pm-cred-choice-row input[type=radio]{flex:none;margin:0;cursor:pointer}
       .pm-cred-choice-name{flex:0 0 104px;font-size:11px;font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
       .pm-cred-choice-row:first-child .pm-cred-choice-name{font-family:inherit}
+      
+      /* The credential fold. It is the section's default state, so the summary has to
+         read as a complete sentence on its own — it is the only line most users see. */
+      .pm-cred-fold>summary{font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
+      .pm-cred-body{display:flex;flex-direction:column;gap:10px;padding-top:8px}
       
       /* A labelled field, not a placeholder doing a label's job. */
       .pm-cred-field{display:flex;flex-direction:column;gap:4px}
@@ -2743,6 +2752,22 @@ window.__ModuleLoader__.load({
           return h(
             Section,
             { title: t('sectionCredentials') },
+            // Folded shut by default, and the summary states the truth in one line:
+            // reading a PUBLIC repository needs no credential at all, so for a
+            // public-only setup this whole section is something the user never has to
+            // open. It unfolds itself only when a token has actually been stored —
+            // hiding the user's own secret behind a fold would be its own small lie.
+            //
+            // A plain `<details>` and not a state hook: the open/closed state is a
+            // browser concern, and the content stays in the tree either way, so the
+            // render tests keep seeing every control they assert on.
+            h(
+              'details',
+              { className: 'pm-disclosure pm-cred-fold', open: store !== null && store.exists === true },
+              h('summary', null, store !== null && store.exists === true ? t('credSummarySet') : t('credSummaryNotNeeded')),
+              h(
+                'div',
+                { className: 'pm-cred-body' },
             h('div', { className: 'pm-sec-note' }, t('credIntro')),
             state.phase === 'loading' ? h('div', { className: 'pm-sec-note' }, t('reading')) : null,
             state.phase === 'error' ? h(Notice, { bad: true, title: t('failed'), body: String(state.error) }) : null,
@@ -2774,6 +2799,8 @@ window.__ModuleLoader__.load({
                 'button',
                 { className: 'pm-btn pm-btn-sm', type: 'button', disabled: state.phase === 'loading', onClick: refresh },
                 state.phase === 'loading' ? t('reading') : t('refresh'),
+              ),
+            ),
               ),
             ),
           )

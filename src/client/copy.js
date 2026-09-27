@@ -202,6 +202,8 @@ export const zh = {
   // The section states one thing above the list: where a token may come from and
   // what the panel is allowed to know about it. Everything else is status.
   sectionCredentials: '認證來源',
+  credSummaryNotNeeded: '目前不需要憑證——讀公開 repo 不需要，只有私有 repo 或 API 限流才要。',
+  credSummarySet: '已設定憑證（面板只拿得到遮罩後綴）。',
   credIntro: '查遠端、更新私有 repo 需要 token。插件只問你自己提供的來源（面板輸入／插件 store／環境變數／gh），下面是實際狀態——面板只拿得到來源、可用性與遮罩後綴，拿不到 token 本身。需要認證的 git 操作另有代辦一途（預設關閉，可在設定開啟）。',
   credHost: '主機',
   credStore: 'store 檔',
@@ -420,6 +422,8 @@ export const en = {
   statThirdPartyLoaded: 'loaded',
 
   sectionCredentials: 'Credentials',
+  credSummaryNotNeeded: 'No credential is needed right now — reading a public repository needs none; only a private remote or the API rate limit does.',
+  credSummarySet: 'A credential is stored (the panel only ever sees a masked hint).',
   credIntro: 'Fetching remotes and updating private repositories need a token. The plugin only asks sources you supplied yourself (panel input, this plugin’s own store, an environment variable, gh); this is what actually happens. The panel receives a source, its availability and a masked hint — never the token itself. Authenticated git operations have a separate delegated route, off by default.',
   credHost: 'host',
   credStore: 'store file',

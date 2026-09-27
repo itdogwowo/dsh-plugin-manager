@@ -309,6 +309,11 @@ a.pm-btn{display:inline-flex;align-items:center;text-decoration:none}
 .pm-cred-choice-name{flex:0 0 104px;font-size:11px;font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .pm-cred-choice-row:first-child .pm-cred-choice-name{font-family:inherit}
 
+/* The credential fold. It is the section's default state, so the summary has to
+   read as a complete sentence on its own — it is the only line most users see. */
+.pm-cred-fold>summary{font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
+.pm-cred-body{display:flex;flex-direction:column;gap:10px;padding-top:8px}
+
 /* A labelled field, not a placeholder doing a label's job. */
 .pm-cred-field{display:flex;flex-direction:column;gap:4px}
 .pm-cred-label{flex:0 0 auto;font-size:11px;font-weight:600}
