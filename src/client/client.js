@@ -225,7 +225,7 @@ window.__ModuleLoader__.load({
         // The section states one thing above the list: where a token may come from and
         // what the panel is allowed to know about it. Everything else is status.
         sectionCredentials: '認證來源',
-        credIntro: '查遠端、更新私有 repo 需要 token。插件照序問幾個來源，下面是實際狀態——面板只拿得到來源、可用性與遮罩後綴，拿不到 token 本身。',
+        credIntro: '查遠端、更新私有 repo 需要 token。插件只問你自己提供的來源（面板輸入／插件 store／環境變數／gh），下面是實際狀態——面板只拿得到來源、可用性與遮罩後綴，拿不到 token 本身。需要認證的 git 操作另有代辦一途（預設關閉，可在設定開啟）。',
         credHost: '主機',
         credStore: 'store 檔',
         credStoreNone: 'store 裡沒有這個主機的 token',
@@ -239,7 +239,7 @@ window.__ModuleLoader__.load({
         credToken: 'Token',
         credTokenHint: '貼上 token：只送到宿主半，存成 0600，不會回傳',
         credSave: '存進 store',
-        credStoreFirst: '存進 store 之後，後面那幾個來源（git helper、鑰匙圈）就永遠不會被問——不會再跳系統對話框。',
+        credStoreFirst: '存進 store 之後，它就排在解析鏈第 2 位：後面的來源不會被問，而且更新時的 git 也會直接用它——不會再跳系統對話框。',
         credMethod: '認證方式',
         credMethodHint: '選一種方式，或讓插件照順序自己找。選定之後，其他來源就不會被問。',
         credMethodAuto: '自動（依序嘗試）',
@@ -256,12 +256,16 @@ window.__ModuleLoader__.load({
         credWorking: '處理中…',
         credDone: '完成',
         credResolved: '會用到的來源',
-        credUnresolved: '六個來源都沒有可用 token',
+        credUnresolved: '目前沒有可用的 token',
         credSettings: '設定',
         credDefaultHost: '預設主機',
         credDisable: '停用來源（只在「自動」時有意義；停用的不會被問）',
         credSaveSettings: '儲存設定',
         credSavedSettings: '設定已儲存',
+        credUseStoredToken: '更新時把 store 的 token 交給 git',
+        credUseStoredTokenHelp: '本機 checkout 的 `git fetch`／`git merge` 會用你存在這裡的那個 token：寫成一個 0600 的暫存檔，只給那一個子行程讀，跑完就刪。git 的參數裡只會出現檔案路徑，不會出現 token。',
+        credDelegateSourcetree: '讓 Sourcetree 代辦認證（借用它的憑證）',
+        credDelegateSourcetreeHelp: '⚠ 開啟之後，「查遠端」會借用 Sourcetree 自己的 git 與它的 credential helper——那是你給 Sourcetree 的憑證，不是給這個插件的，所以預設關閉。憑證只交給那一個 git 子行程，本插件只看得到 ref 清單。',
       }
       
       const en = {
@@ -439,7 +443,7 @@ window.__ModuleLoader__.load({
         statThirdPartyLoaded: 'loaded',
       
         sectionCredentials: 'Credentials',
-        credIntro: 'Fetching remotes and updating private repositories need a token. The plugin asks six sources in order; this is what actually happens. The panel receives a source, its availability and a masked hint — never the token itself.',
+        credIntro: 'Fetching remotes and updating private repositories need a token. The plugin only asks sources you supplied yourself (panel input, this plugin’s own store, an environment variable, gh); this is what actually happens. The panel receives a source, its availability and a masked hint — never the token itself. Authenticated git operations have a separate delegated route, off by default.',
         credHost: 'host',
         credStore: 'store file',
         credStoreNone: 'no token for this host in the store',
@@ -453,7 +457,7 @@ window.__ModuleLoader__.load({
         credToken: 'Token',
         credTokenHint: 'Paste a token: it goes to the host half only, is stored 0600, and is never sent back',
         credSave: 'Save to store',
-        credStoreFirst: 'Once a token is saved here, the later sources (git helper, keychain) are never asked — no system dialog appears again.',
+        credStoreFirst: 'Once a token is saved here it sits second in the chain: the later sources are not asked, and the git a checkout update runs uses it directly — no system dialog appears again.',
         credMethod: 'Credential method',
         credMethodHint: 'Pick one method, or let the plugin work down the list. Once chosen, the other sources are not asked.',
         credMethodAuto: 'Automatic (try in order)',
@@ -470,12 +474,16 @@ window.__ModuleLoader__.load({
         credWorking: 'Working…',
         credDone: 'Done',
         credResolved: 'source that would answer',
-        credUnresolved: 'none of the six sources has a usable token',
+        credUnresolved: 'none of the available sources has a token',
         credSettings: 'Settings',
         credDefaultHost: 'default host',
         credDisable: 'disabled sources (only meaningful under Automatic; a disabled source is never asked)',
         credSaveSettings: 'Save settings',
         credSavedSettings: 'Settings saved',
+        credUseStoredToken: 'Hand this plugin’s stored token to git',
+        credUseStoredTokenHelp: 'A local checkout’s `git fetch`/`git merge` uses the token you saved here: it is written to a 0600 temp file that only that one child reads, and deleted when the run ends. Only the file path appears in the git arguments — never the token.',
+        credDelegateSourcetree: 'Let Sourcetree authenticate (borrows its credential)',
+        credDelegateSourcetreeHelp: '⚠ When on, “check remote” BORROWS Sourcetree’s own git and its credential helper — that credential belongs to Sourcetree, not to this plugin, which is why this is off by default. It is handed to that one git child, and this plugin only ever sees the ref list.',
       }
       
       return { NS, zh, en }
@@ -796,6 +804,14 @@ window.__ModuleLoader__.load({
       .pm-cred-field{display:flex;flex-direction:column;gap:4px}
       .pm-cred-label{flex:0 0 auto;font-size:11px;font-weight:600}
       .pm-cred-help{font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
+      /* The two credential switches: a labelled checkbox with its explanation under
+         it, so which credential is being lent (and to whom) is readable without a
+         tooltip. None of these names is a prefix of another — findByClass in the
+         tests is a substring match (docs/plan.md §7.3). */
+      .pm-cred-flags{display:flex;flex-direction:column;gap:6px}
+      .pm-cred-flag-row{display:flex;flex-direction:column;gap:2px}
+      .pm-cred-flag-label{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+      .pm-cred-flag-name{font-size:11px;font-weight:600}
       /* The armed state of the one destructive control: it reads as a warning BEFORE
          the second press, which is the whole point of arming it. */
       .pm-btn-danger{border-color:var(--dsw-alias-state-error-primary,#cf222e);color:var(--dsw-alias-state-error-primary,#cf222e);font-weight:600}
@@ -2608,6 +2624,52 @@ window.__ModuleLoader__.load({
                 ? h(Notice, { title: t('credDone'), body: String(outcome.note === null || outcome.note === undefined ? '' : outcome.note) })
                 : h(Notice, { bad: true, title: t('checkFailed'), body: String(outcome.error === null || outcome.error === undefined ? '' : outcome.error) })
       
+          /**
+           * One boolean setting, as a switch that saves the moment it is flipped.
+           *
+           * Saved immediately, like the method radios and unlike the host/disabled
+           * drafts above: a switch that needs a second button lies about what it did.
+           *
+           * `known` is false when the running host half predates this control. The
+           * switch is then DISABLED rather than offered, because a control the host
+           * would silently ignore is the same failure the section already warns about
+           * for `preferredSource` — and both fields arrive from the same host half.
+           *
+           * ⚠️ The class names are chosen so none is a PREFIX of another (`-flags`,
+           * `-flag-row`, `-flag-label`, `-flag-name`): `findByClass` in the tests is a
+           * substring match, so `pm-cred-switch` would also have matched
+           * `pm-cred-switch-row` and turned a two-row assertion into a six-row one.
+           * That trap is recorded in docs/plan.md §7.3.
+           */
+          const flagRow = (key, label, help) => {
+            const known = ready && typeof data[key] === 'boolean'
+            const on = known && data[key] === true
+            return h(
+              'div',
+              { className: 'pm-cred-flag-row' },
+              h(
+                'label',
+                { className: 'pm-cred-flag-label' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: on,
+                  disabled: idle || !known,
+                  // A change event on a checkbox means the box was flipped, so the new
+                  // value is the negation of what is rendered — reading `checked` off
+                  // the event would be the same answer by a longer route.
+                  onChange: () =>
+                    run({
+                      label: `switch:${key}`,
+                      call: (host_) => host_.saveSettings({ [key]: !on }),
+                      succeed: () => ({ ok: true, note: t('credSavedSettings') }),
+                    }),
+                }),
+                h('span', { className: 'pm-cred-flag-name' }, label),
+              ),
+              h('div', { className: 'pm-cred-help' }, help),
+            )
+          }
+      
           const settingsBlock = h(
             'details',
             { className: 'pm-disclosure' },
@@ -2665,6 +2727,17 @@ window.__ModuleLoader__.load({
               ),
             ),
             h('div', { className: 'pm-sec-note' }, t('credDisable')),
+            // The two switches about CREDENTIALS LEAVING THIS PLUGIN. The first lends
+            // the user's own saved token to a git child; the second borrows a
+            // credential this plugin was never given. Both are stated in those terms,
+            // because the difference is the whole reason one defaults on and the other
+            // defaults off.
+            h(
+              'div',
+              { className: 'pm-cred-flags' },
+              flagRow('useStoredTokenForGit', t('credUseStoredToken'), t('credUseStoredTokenHelp')),
+              flagRow('delegateSourcetree', t('credDelegateSourcetree'), t('credDelegateSourcetreeHelp')),
+            ),
           )
       
           return h(

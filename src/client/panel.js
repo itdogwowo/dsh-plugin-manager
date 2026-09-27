@@ -939,6 +939,52 @@ export function createPanel(react, makeUpdatePanel) {
           ? h(Notice, { title: t('credDone'), body: String(outcome.note === null || outcome.note === undefined ? '' : outcome.note) })
           : h(Notice, { bad: true, title: t('checkFailed'), body: String(outcome.error === null || outcome.error === undefined ? '' : outcome.error) })
 
+    /**
+     * One boolean setting, as a switch that saves the moment it is flipped.
+     *
+     * Saved immediately, like the method radios and unlike the host/disabled
+     * drafts above: a switch that needs a second button lies about what it did.
+     *
+     * `known` is false when the running host half predates this control. The
+     * switch is then DISABLED rather than offered, because a control the host
+     * would silently ignore is the same failure the section already warns about
+     * for `preferredSource` — and both fields arrive from the same host half.
+     *
+     * ⚠️ The class names are chosen so none is a PREFIX of another (`-flags`,
+     * `-flag-row`, `-flag-label`, `-flag-name`): `findByClass` in the tests is a
+     * substring match, so `pm-cred-switch` would also have matched
+     * `pm-cred-switch-row` and turned a two-row assertion into a six-row one.
+     * That trap is recorded in docs/plan.md §7.3.
+     */
+    const flagRow = (key, label, help) => {
+      const known = ready && typeof data[key] === 'boolean'
+      const on = known && data[key] === true
+      return h(
+        'div',
+        { className: 'pm-cred-flag-row' },
+        h(
+          'label',
+          { className: 'pm-cred-flag-label' },
+          h('input', {
+            type: 'checkbox',
+            checked: on,
+            disabled: idle || !known,
+            // A change event on a checkbox means the box was flipped, so the new
+            // value is the negation of what is rendered — reading `checked` off
+            // the event would be the same answer by a longer route.
+            onChange: () =>
+              run({
+                label: `switch:${key}`,
+                call: (host_) => host_.saveSettings({ [key]: !on }),
+                succeed: () => ({ ok: true, note: t('credSavedSettings') }),
+              }),
+          }),
+          h('span', { className: 'pm-cred-flag-name' }, label),
+        ),
+        h('div', { className: 'pm-cred-help' }, help),
+      )
+    }
+
     const settingsBlock = h(
       'details',
       { className: 'pm-disclosure' },
@@ -996,6 +1042,17 @@ export function createPanel(react, makeUpdatePanel) {
         ),
       ),
       h('div', { className: 'pm-sec-note' }, t('credDisable')),
+      // The two switches about CREDENTIALS LEAVING THIS PLUGIN. The first lends
+      // the user's own saved token to a git child; the second borrows a
+      // credential this plugin was never given. Both are stated in those terms,
+      // because the difference is the whole reason one defaults on and the other
+      // defaults off.
+      h(
+        'div',
+        { className: 'pm-cred-flags' },
+        flagRow('useStoredTokenForGit', t('credUseStoredToken'), t('credUseStoredTokenHelp')),
+        flagRow('delegateSourcetree', t('credDelegateSourcetree'), t('credDelegateSourcetreeHelp')),
+      ),
     )
 
     return h(

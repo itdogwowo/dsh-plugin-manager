@@ -42,7 +42,8 @@ import { buildPluginInventory } from './profile.js'
 import { setEnabled } from './patch-writer.js'
 import { findSourcetreeGit, findSourcetreeHelper, probeDshLauncher, probeGit, resolveTool, sourcetreeExecPathFor, userHome } from './host.js'
 import { readLocalRefs, parseRemoteUrl } from './gitrefs.js'
-import { credentialStatus, normalizeHost, normalizeToken, redactResolution, resolveCredential, settingsStatus, writeCredentialStore, writeSettings } from './credentials.js'
+import { credentialStatus, normalizeHost, normalizeToken, readCredentialStore, readSettings, redactResolution, resolveCredential, settingsStatus, writeCredentialStore, writeSettings } from './credentials.js'
+import { credentialArgsFor, isGitArgv, removeStoreFile, storeFilePath, writeStoreFile } from './gitcredentials.js'
 import { dshHomeOf } from './snapshot.js'
 import { fetchRemoteRefs, listRemoteRefs } from './gitremote.js'
 import { toolInstallHint } from './install-hints.mjs'
@@ -410,39 +411,44 @@ function remoteRefsHandler(get) {
         return
       }
 
-      // ── delegation first ────────────────────────────────────────────────────
+      // ── delegation, and only when the user asked for it ────────────────────
       // If Sourcetree's credential helper is on this machine, git can
       // authenticate the request ITSELF: the helper answers the git child, the
-      // plugin only reads the ref list, and no token has to exist anywhere. That
-      // is why this branch is tried before the REST path, which needs a token in
-      // this process.
+      // plugin only reads the ref list, and no token has to exist anywhere.
       //
-      // No Sourcetree (or no git) means no delegation — the REST path below is
-      // untouched, token and all.
-      // Sourcetree's OWN git first: its exec-path carries the credential helper the
-      // OS store already trusts, which is the difference between a silent push and
-      // a password prompt (measured; see dsh-Note/sync/skills/git-push).
-      const sourcetreeGit = await findSourcetreeGit(context.fs, userHome())
-      // The helper is passed EVEN WHEN Sourcetree's git is used, because it is the
-      // helper — not the binary — that hands over the credential: measured, the
-      // bundle's own `git-credential-osxkeychain` blocks on an OS prompt while
-      // `Resources/bin/git-credential-sourcetree` answers in 6.7 s. Leaving it out
-      // would send a private-repo request back to the helper on PATH.
-      const helper = await findSourcetreeHelper(context.fs, userHome())
-      if (sourcetreeGit !== null || helper !== null) {
-        const gitPath = sourcetreeGit ?? (await resolveTool(context.subprocess, 'git'))
-        if (gitPath !== null) {
-          // A delegation that fails is REPORTED, not silently retried with a token
-          // the user never offered: the reason is the answer.
-          const delegated = await listRemoteRefs(context.subprocess, {
-            url: remote.url,
-            cwd: root,
-            helper,
-            gitPath,
-            execPath: sourcetreeExecPathFor(sourcetreeGit),
-          })
-          sendJson(res, 200, { ...delegated, name, remote, sourcetreeGit: sourcetreeGit !== null })
-          return
+      // ⚠️ That convenience is OPT-IN (`settings.delegateSourcetree`, default
+      // false). The credential it borrows is one the user handed to Sourcetree,
+      // never to this plugin, so spending it without being asked would be this
+      // plugin using a secret it was not given. With the switch off, the block is
+      // skipped ENTIRELY — no Sourcetree lookup, no git child — and the REST path
+      // below runs exactly as it did before delegation existed.
+      const settings = await readSettings(dshHomeOf(context.profileDir))
+      if (settings.delegateSourcetree === true) {
+        // Sourcetree's OWN git first: its exec-path carries the credential helper the
+        // OS store already trusts, which is the difference between a silent push and
+        // a password prompt (measured; see dsh-Note/sync/skills/git-push).
+        const sourcetreeGit = await findSourcetreeGit(context.fs, userHome())
+        // The helper is passed EVEN WHEN Sourcetree's git is used, because it is the
+        // helper — not the binary — that hands over the credential: measured, the
+        // bundle's own `git-credential-osxkeychain` blocks on an OS prompt while
+        // `Resources/bin/git-credential-sourcetree` answers in 6.7 s. Leaving it out
+        // would send a private-repo request back to the helper on PATH.
+        const helper = await findSourcetreeHelper(context.fs, userHome())
+        if (sourcetreeGit !== null || helper !== null) {
+          const gitPath = sourcetreeGit ?? (await resolveTool(context.subprocess, 'git'))
+          if (gitPath !== null) {
+            // A delegation that fails is REPORTED, not silently retried with a token
+            // the user never offered: the reason is the answer.
+            const delegated = await listRemoteRefs(context.subprocess, {
+              url: remote.url,
+              cwd: root,
+              helper,
+              gitPath,
+              execPath: sourcetreeExecPathFor(sourcetreeGit),
+            })
+            sendJson(res, 200, { ...delegated, name, remote, sourcetreeGit: sourcetreeGit !== null })
+            return
+          }
         }
       }
 
@@ -643,6 +649,97 @@ function parameterFromQuery(url, key) {
 }
 
 /**
+ * The `-C <dir>` a materialised git argv carries, or null.
+ *
+ * Read from the argv rather than from the plan on purpose: the argv is what
+ * actually runs, so the repository whose remote is read is the repository git
+ * will operate on, even if a future plan spells the command differently.
+ *
+ * @param {string[]} argv - the materialised argv.
+ * @returns {string|null} the directory, or null.
+ */
+function gitDirOf(argv) {
+  for (let index = 1; index < argv.length - 1; index += 1) {
+    if (argv[index] === '-C') return String(argv[index + 1])
+  }
+  return null
+}
+
+/**
+ * The credential injection for one change, or an empty plan.
+ *
+ * Five conditions, all of them required, and each one is also a reason NOT to
+ * touch a child's credentials:
+ *
+ * 1. the materialised command runs git — an `add`/`remove` runs the dsh CLI, and
+ *    this must not reach into how the CLI authenticates its own work;
+ * 2. `useStoredTokenForGit` is on (default true): the token came from this
+ *    plugin's own store, so using it hands the child what the user gave US;
+ * 3. the git command names a checkout whose origin remote parses to a host —
+ *    without a host there is no way to know which credential is even relevant,
+ *    and sending one to a guessed host is the failure mode this avoids;
+ * 4. this plugin's OWN store holds a token for that host. Nothing is resolved
+ *    from git, the environment or another application: this is the store, and
+ *    only the store;
+ * 5. the 0600 file could actually be written.
+ *
+ * A miss is not an error and does not stop the change: the git child then
+ * authenticates exactly as it did before this feature existed. What a miss must
+ * NOT be is silent, because the user's next question would be "why was I asked
+ * for a password again?" — so the decision travels back in `report`, which
+ * carries a host, a path and a reason, never a token.
+ *
+ * @param {object} context - the result of {@link resolveChangeContext}.
+ * @param {{ git: object|null, launcher: object|null }} probes - the tool probes.
+ * @param {string[]} argv - the plan's argv (materialised here, not by the pipeline).
+ * @returns {Promise<{ args: string[], path: string|null, report: object }>} the injection.
+ */
+async function prepareGitCredential(context, probes, argv) {
+  /** A decision not to inject, with the reason the panel will show. */
+  const miss = (error, host = null) => ({ args: [], path: null, report: { injected: false, host, path: null, error } })
+
+  const materialised = materialiseArgv({ git: probes?.git ?? null, launcher: probes?.launcher ?? null }, argv)
+  if (materialised.ok !== true || isGitArgv(materialised.argv) !== true) return miss(null)
+
+  const dir = gitDirOf(materialised.argv)
+  if (dir === null) return miss('this git command names no checkout whose remote could be read')
+
+  // Without a home there is no state directory to write INSIDE, and a path built
+  // from an empty base is an absolute path at the filesystem root — so this is a
+  // refusal, not a fallback.
+  const dshHome = dshHomeOf(context.profileDir)
+  if (typeof dshHome !== 'string' || dshHome.length === 0) {
+    return miss('this plugin has no state directory to keep a credential file in')
+  }
+
+  const settings = await readSettings(dshHome)
+  if (settings.useStoredTokenForGit !== true) {
+    return miss('handing this plugin\u2019s stored token to git is switched off in the settings')
+  }
+
+  const remote = await remoteOf(context.fs, dir)
+  if (remote === null || remote.ok !== true || typeof remote.host !== 'string') {
+    return miss('this checkout records no origin remote whose host could be read')
+  }
+
+  const store = await readCredentialStore(dshHome)
+  // A store that exists and cannot be read is a different answer from "nothing
+  // saved", and only one of them is the user's fault — the same distinction the
+  // credentials route makes.
+  if (store.error !== null) return miss(`this plugin's credential store could not be read: ${store.error}`)
+  const token = normalizeToken(store.entries?.[remote.host]?.token)
+  if (token === null) return miss(`no token is saved for ${remote.host}`, remote.host)
+
+  // Only the PATH goes into the argv; the token goes into a 0600 file that the
+  // caller deletes in a `finally`. See `gitcredentials.js`.
+  const path = storeFilePath(dshHome)
+  const written = await writeStoreFile(path, remote.host, null, token)
+  if (written.ok !== true) return miss(`the credential file could not be written: ${written.error}`, remote.host)
+
+  return { args: credentialArgsFor(path), path, report: { injected: true, host: remote.host, path, error: null } }
+}
+
+/**
  * `apply` — run one change through the pipeline.
  *
  * Refuses with `ok: false` and a reason rather than throwing: a refusal is an
@@ -729,27 +826,41 @@ function applyHandler(get) {
         label = `update ${name}${ref === null ? '' : ` → ${ref}`}`
       }
 
-      const run = await runPipeline({
-        fs: context.fs,
-        subprocess: context.subprocess,
-        launcher: probes.launcher,
-        git: probes.git,
-        selfName: SELF_NAME,
-        profileDir: context.profileDir,
-        profileName: context.profileName,
-        argv,
-        label,
-        action: verb,
-        detail: { name, ref, spec, verb },
-        noVerify,
-      })
+      // ── the plugin's own token, for the git child ───────────────────────────
+      // Decided here rather than inside the pipeline because it is a QUESTION
+      // about this plugin's settings and store, not about running a command; the
+      // pipeline only splices the arguments into the argv it materialises.
+      const credential = await prepareGitCredential(context, probes, argv)
+      try {
+        const run = await runPipeline({
+          fs: context.fs,
+          subprocess: context.subprocess,
+          launcher: probes.launcher,
+          git: probes.git,
+          selfName: SELF_NAME,
+          profileDir: context.profileDir,
+          profileName: context.profileName,
+          argv,
+          label,
+          action: verb,
+          detail: { name, ref, spec, verb },
+          noVerify,
+          credentialArgs: credential.args,
+        })
 
-      // The claim the user is about to read must be checked, not assumed: the
-      // recorded spec is re-read so "ok" cannot be printed over an unchanged
-      // profile.
-      const manifestPath = `${context.profileDir}/package.json`
-      const recorded = name === null ? null : await readSpecSafely(context.fs, manifestPath, name)
-      sendJson(res, 200, { ...run, recordedSpec: recorded, profileDir: context.profileDir })
+        // The claim the user is about to read must be checked, not assumed: the
+        // recorded spec is re-read so "ok" cannot be printed over an unchanged
+        // profile.
+        const manifestPath = `${context.profileDir}/package.json`
+        const recorded = name === null ? null : await readSpecSafely(context.fs, manifestPath, name)
+        sendJson(res, 200, { ...run, recordedSpec: recorded, profileDir: context.profileDir, gitCredential: credential.report })
+      } finally {
+        // The credential file must not outlive the run, on ANY path out of here:
+        // a success, a refusal, a rejected run or a thrown error. A file that
+        // could not be removed is reported by the step that tried (it is 0600 and
+        // nobody else's), but it never changes the run's own answer.
+        if (credential.path !== null) await removeStoreFile(credential.path)
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.error(`[dsh-plugin-manager] apply failed: ${message}`)
@@ -871,6 +982,8 @@ function settingsHandler(get) {
         defaultHost: body.defaultHost,
         disabledSources: body.disabledSources,
         preferredSource: body.preferredSource,
+        delegateSourcetree: body.delegateSourcetree,
+        useStoredTokenForGit: body.useStoredTokenForGit,
       })
       if (!written.ok) {
         sendJson(res, 200, { ok: false, path: written.path, error: written.error })

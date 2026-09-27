@@ -285,9 +285,13 @@ dsh plugin --profile web add link:<你 clone 的位置>/dsh-plugin-manager
 > `/usr/bin/security find-internet-password -w` 都會把 **Sourcetree 存的那組憑證複製進本插件的行程**。
 > 那是抽取，不是代辦。指示很明確：**不要拿他的憑證，操作他代辦**。
 
-### 代辦：讓 Sourcetree 幫我們認證
+### 代辦：讓 Sourcetree 幫我們認證（**預設關閉**）
 
-需要認證的操作（例如「查遠端」）**優先走代辦**，完全不經過上面的 token 清單：
+> ⚠️ 這一項預設**關閉**：代辦借的是你給 **Sourcetree** 的憑證，不是給這個插件的。
+> 沒問過你就拿別人的憑證去用，不是這個插件該做的事，所以它要你**在面板的設定裡自己打開**
+> （`$DSH_HOME/.dsh-pm/settings.json` 的 `delegateSourcetree`）。
+
+打開之後，需要認證的操作（例如「查遠端」）會走代辦，完全不經過上面的 token 清單：
 
 1. 找到 Sourcetree 自己的 helper：`~/Applications/Sourcetree.app/Contents/Resources/bin/git-credential-sourcetree`
    （其次 `…/git_local/bin/git-credential-osxkeychain`）
@@ -295,17 +299,38 @@ dsh plugin --profile web add link:<你 clone 的位置>/dsh-plugin-manager
 3. helper 把憑證交給那個子行程；**本插件只看得到 ref 清單**——憑證不進本行程，也不可能從本行程外流
 4. `-c` **只給這個子行程**：不寫你的 git 全域設定、不設環境變數
 
-沒有 Sourcetree 的機器會自動走回 REST 路徑（那條才需要 token）。
+關閉時（預設）這個區塊**整個跳過**：不找 Sourcetree、不跑 git 子行程，直接走 REST 路徑
+（那條才需要 token）；沒有 Sourcetree 的機器就算打開了也是同一條路。
 
 > ℹ️ 這也是為什麼面板上的來源只剩四個：**代辦不是一個「來源」，是一個操作模式。**
 
 > 💡 **要一次解決、之後再也不跳對話框**：把 token 貼進面板的 store 欄位存起來。
 > 它在鏈的第 **2** 順位，所以後面的來源**永遠不會被叫到**（連子行程都不會跑）。
-> 而**需要認證的操作本來就會先走代辦**，所以多數情況下你連 token 都不用準備。
+> 而且從這一版起，**本機 checkout 的更新也會用到它**（見下一節），所以連更新都不必再按密碼框。
 >
 > 這也是 `dsh-Note/notes/pitfalls.md`（2026-09-18）那條的同一課：
 > **權限受限的環境會擋住憑證 helper 與憑證存放區**——不是 git 的問題，也不是認證的問題。
 > 自己存一份，是唯一不受那個限制影響的路。
+
+### 更新本機 checkout 時，token 怎麼給 git
+
+面板設定裡有兩個開關（在「設定」收合區裡，主機欄位與停用來源清單下面）：
+
+| 開關 | 預設 | 做什麼 |
+|---|---|---|
+| **更新時把 store 的 token 交給 git** | **開** | `git fetch`／`git merge --ff-only` 會用你存在這個插件裡的 token |
+| **讓 Sourcetree 代辦認證** | **關** | 「查遠端」借用 Sourcetree 的 git 與它的 credential helper |
+
+第一個開關（`useStoredTokenForGit`）的作法是 git 自己的 `store` helper：
+
+1. 你的 token 被寫進 `$DSH_HOME/.dsh-pm/git-credentials.tmp`（**0600**，一次只放一個主機）
+2. 那一個 git 子行程拿到的是
+   `git -c credential.helper= -c "credential.helper=store --file=<那個檔>" …`
+   —— 第一個空的 `credential.helper=` 是**刻意**的：git 的 helper 會累加，清掉繼承來的那個才不會又跳系統密碼框
+3. 跑完（成功或失敗）那個檔**一定被刪掉**
+4. **token 不會進 argv**：命令列裡只有**檔案路徑**；`-c` 只給那一個子行程，不寫你的 git 全域設定
+
+第二個開關是上面那一節的代辦，**預設關閉**，而且它的說明文字就寫著它「**借用**」Sourcetree 的憑證。
 
 > 🎛️ **認證方式（可選）**：面板那一組單選就是「要用哪一種」。
 > **自動** = 照上表順序問；**選定某一種** = 只問那一種，其餘來源連子行程都不會跑
@@ -320,7 +345,9 @@ dsh plugin --profile web add link:<你 clone 的位置>/dsh-plugin-manager
 
 - token **不會**回傳瀏覽器——面板只拿得到來源、可用性、與遮罩後綴（`ghp_••••••6789`）
 - token **不會**被寫進任何訊息或 log
-- token **不會**進快照（快照只複製 profile 檔）
+- token **不會**進 argv——給 git 子行程的只有 `$DSH_HOME/.dsh-pm/git-credentials.tmp` 的**路徑**
+- token **不會**進快照（快照只複製 profile 檔；那個暫存檔在 `.dsh-pm/`，不在 profile 裡）
+- 那個暫存檔是 **0600**，而且每次跑完就刪（成功、失敗、被拒絕都一樣）
 - 插件**不會**碰 `settings.yaml`、宿主的 `settings` 服務、或你 git 的全域設定
 
 > **面板位置**：設定 → 外掛 → 插件管理器，最下面「**認證來源**」一節。

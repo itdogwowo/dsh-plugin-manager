@@ -86,6 +86,27 @@ export const DEFAULT_DISABLED_SOURCES = []
 export const ENV_TOKEN_NAMES = ['DSH_PM_GITHUB_TOKEN', 'GITHUB_TOKEN', 'GH_TOKEN']
 
 /**
+ * May a request authenticate by DELEGATING to a Sourcetree installation?
+ *
+ * OFF by default, and that is the point: delegation borrows a credential the
+ * user handed to Sourcetree, not to this plugin. Doing that silently would mean
+ * this plugin spends a secret it was never given, so it happens only after the
+ * user says so.
+ */
+export const DEFAULT_DELEGATE_SOURCETREE = false
+
+/**
+ * May a git child be handed THIS plugin's own stored token?
+ *
+ * ON by default, which is the opposite decision from the one above and for the
+ * opposite reason: the token in the plugin's store is one the user typed here,
+ * for this plugin, so using it is using what it was given. Without it a checkout
+ * update is authenticated by whatever the OS helper decides — the behaviour that
+ * made a saved token useless to the one operation that needed it.
+ */
+export const DEFAULT_USE_STORED_TOKEN_FOR_GIT = true
+
+/**
  * Timeout for the one helper that is still spawned.
  *
  * The 4 s figure is kept from a measurement that no longer applies to this list
@@ -298,13 +319,31 @@ export async function writeCredentialStore(dshHome, host, token) {
 }
 
 /**
+ * A stored boolean, or the fallback when the file (or the request) holds
+ * something else.
+ *
+ * `"false"` is NOT false. JSON has real booleans, and a coercing read would turn
+ * a typo in a hand-edited settings file — or in a request body — into a silent
+ * "off", or into a silent "on" for a switch whose default protects the user.
+ * Neither is acceptable for a setting that decides whether a credential is lent
+ * to a child process, so anything that is not a boolean falls back.
+ *
+ * @param {unknown} value - the candidate.
+ * @param {boolean} fallback - the value to keep when it is not a boolean.
+ * @returns {boolean} the boolean.
+ */
+function booleanOr(value, fallback) {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+/**
  * The plugin's own settings.
  *
  * Deliberately NOT the host's `settings` service and NOT `$DSH_HOME/settings.yaml`:
  * this is plugin state, it is read and written by this plugin alone, and it
  * lives in this plugin's directory (docs/plan.md §4.3).
  * @param {string} dshHome - `$DSH_HOME`.
- * @returns {Promise<{ defaultHost: string, disabledSources: string[], exists: boolean, error: string|null }>} the settings.
+ * @returns {Promise<{ defaultHost: string, disabledSources: string[], preferredSource: string, delegateSourcetree: boolean, useStoredTokenForGit: boolean, exists: boolean, error: string|null }>} the settings.
  */
 export async function readSettings(dshHome) {
   const read = await readJsonObject(settingsPath(dshHome))
@@ -324,6 +363,11 @@ export async function readSettings(dshHome) {
     // because they answer different questions: a user who picks "the keychain"
     // still has an opinion about what `auto` would do if they switch back.
     preferredSource: normalizeSourceChoice(value.preferredSource),
+    // The two switches that decide whether a credential is handed to a CHILD
+    // process. Both are read here so the panel, the routes and the git path all
+    // answer from the same file.
+    delegateSourcetree: booleanOr(value.delegateSourcetree, DEFAULT_DELEGATE_SOURCETREE),
+    useStoredTokenForGit: booleanOr(value.useStoredTokenForGit, DEFAULT_USE_STORED_TOKEN_FOR_GIT),
     exists: read.exists,
     error: read.error,
   }
@@ -347,8 +391,13 @@ export function normalizeSourceChoice(value) {
 
 /**
  * Save the plugin's settings.
+ *
+ * A field whose value is not the right TYPE is not stored and not defaulted: the
+ * current value is kept, so a bad request can only fail to change something, and
+ * can never switch a credential-sharing setting on (or off) by accident.
+ *
  * @param {string} dshHome - `$DSH_HOME`.
- * @param {{ defaultHost?: unknown, disabledSources?: unknown, preferredSource?: unknown }} patch - the fields to set.
+ * @param {{ defaultHost?: unknown, disabledSources?: unknown, preferredSource?: unknown, delegateSourcetree?: unknown, useStoredTokenForGit?: unknown }} patch - the fields to set.
  * @returns {Promise<{ ok: boolean, path: string, error: string|null }>} the write.
  */
 export async function writeSettings(dshHome, patch) {
@@ -360,6 +409,8 @@ export async function writeSettings(dshHome, patch) {
       ? patch.disabledSources.filter((id) => SOURCE_IDS.includes(id))
       : current.disabledSources,
     preferredSource: patch?.preferredSource === undefined ? current.preferredSource : normalizeSourceChoice(patch.preferredSource),
+    delegateSourcetree: booleanOr(patch?.delegateSourcetree, current.delegateSourcetree),
+    useStoredTokenForGit: booleanOr(patch?.useStoredTokenForGit, current.useStoredTokenForGit),
   }
   return writeJsonObject(settingsPath(dshHome), next)
 }
@@ -573,6 +624,10 @@ export async function credentialStatus(input) {
     },
     settingsError: settings.error,
     preferredSource: settings.preferredSource,
+    // The two switches the panel renders beside the default host. They are facts
+    // about this plugin's own settings file, never about a token.
+    delegateSourcetree: settings.delegateSourcetree,
+    useStoredTokenForGit: settings.useStoredTokenForGit,
     // Every entry is a fact about the machine or the store — never a token.
     // `chosen` is the answer to "is this the method the user picked?", which the
     // panel needs in order to render one selection rather than reconstruct it.
@@ -620,6 +675,8 @@ export async function settingsStatus(dshHome) {
     defaultHost: settings.defaultHost,
     disabledSources: settings.disabledSources,
     preferredSource: settings.preferredSource,
+    delegateSourcetree: settings.delegateSourcetree,
+    useStoredTokenForGit: settings.useStoredTokenForGit,
     path: settingsPath(dshHome),
     exists: settings.exists,
     error: settings.error,

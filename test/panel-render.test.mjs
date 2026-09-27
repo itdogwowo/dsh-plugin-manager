@@ -1749,6 +1749,60 @@ test('credentials: with no host face the section explains itself instead of thro
   assert.match(text, /T:noHost/, 'a missing channel is a sentence, not a blank section')
 })
 
+test('credentials: the two git switches are labelled, explained, and saved when flipped', async () => {
+  const written = []
+  const mounted = await withCredentials({
+    credentialStatus: () => Promise.resolve(credentialsPayload({ delegateSourcetree: false, useStoredTokenForGit: true })),
+    saveSettings: (patch) => {
+      written.push(patch)
+      return Promise.resolve({ ok: true })
+    },
+  })
+  const tree = mounted.current()
+  const rows = findByClass(tree, 'pm-cred-flag-row')
+  assert.equal(rows.length, 2, 'one switch per credential-sharing setting')
+
+  // A VISIBLE label, not a placeholder doing a label's job — the same rule the
+  // token field follows. And the explanation sits UNDER the control it explains.
+  const boxes = rows.map((row) => {
+    assert.equal(row.children[0].type, 'label', 'each switch is labelled by a real label element')
+    assert.equal(row.children[1].props.className, 'pm-cred-help', 'and the helper text is under it')
+    return row.children[0].children[0]
+  })
+  assert.deepEqual(
+    boxes.map((box) => box.props.checked),
+    [true, false],
+    'the host said the stored token is used and Sourcetree is not borrowed',
+  )
+
+  const text = textOf(tree).join(' ')
+  assert.match(text, /T:credUseStoredToken/)
+  assert.match(text, /T:credUseStoredTokenHelp/)
+  assert.match(text, /T:credDelegateSourcetree/)
+  assert.match(text, /T:credDelegateSourcetreeHelp/)
+
+  // Flipping one saves a patch of THAT field only: a client that sent the whole
+  // settings object would race with any other change made in between.
+  rows[1].children[0].children[0].props.onChange()
+  await settle()
+  assert.deepEqual(written, [{ delegateSourcetree: true }])
+  assert.match(textOf(mounted.current()).join(' '), /T:credSavedSettings/)
+})
+
+test('credentials: a switch an older host half does not report is disabled, not silently ignored', async () => {
+  // `credentialsPayload()` carries no `delegateSourcetree`/`useStoredTokenForGit`,
+  // which is what a host half older than this panel sends. Offering a control
+  // whose click would be forgotten is the failure the section already names for
+  // `preferredSource`; here the control is present but unusable.
+  const mounted = await withCredentials({ credentialStatus: () => Promise.resolve(credentialsPayload()) })
+  const boxes = findByClass(mounted.current(), 'pm-cred-flag-row').map((row) => row.children[0].children[0])
+  assert.deepEqual(
+    boxes.map((box) => box.props.disabled),
+    [true, true],
+  )
+  assert.match(textOf(mounted.current()).join(' '), /T:credHostStale/, 'and the reason is on screen')
+})
+
 
 
 

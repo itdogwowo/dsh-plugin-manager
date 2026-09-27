@@ -30,6 +30,7 @@
  */
 
 import { dshArgv, firstLine, runProcess } from './host.js'
+import { withCredentialArgs } from './gitcredentials.js'
 import { kindOf } from './detect-report.js'
 import { readGitState } from './detect.js'
 import { locateGitDir, parseRemoteUrl } from './gitrefs.js'
@@ -656,7 +657,9 @@ export async function readRecordedSpec(fs, manifestPath, name) {
 /**
  * Run the whole pipeline for one change.
  *
- * @param {object} input - `{ fs, subprocess, launcher, git, selfName, profileDir, profileName, argv, label, action, detail, noVerify?, timeoutMs? }`.
+ * @param {object} input - `{ fs, subprocess, launcher, git, selfName, profileDir, profileName, argv, label, action, detail, noVerify?, timeoutMs?, credentialArgs? }`.
+ *   `credentialArgs` are spliced in after the binary for a git argv only (see
+ *   `gitcredentials.js`); the token itself is never part of them.
  * @returns {Promise<object>} plain-JSON run record.
  */
 export async function runPipeline(input) {
@@ -693,7 +696,12 @@ export async function runPipeline(input) {
     out.error = materialised.error
     return out
   }
-  out.argv = materialised.argv
+  // The credential file is the ROUTE's business (it decides whether a token
+  // exists, for which host, and whether the setting allows it); splicing the
+  // arguments in is the pipeline's, because this is the argv that is actually
+  // spawned — and the record must report the command that ran rather than the
+  // command that was planned. A non-git argv comes back untouched.
+  out.argv = withCredentialArgs(materialised.argv, input?.credentialArgs)
 
   // ── ① verify, unless the escape hatch was taken ───────────────────────────
   if (out.skippedVerification) {

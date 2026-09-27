@@ -89,3 +89,20 @@ test('copy: no dictionary key is dead', () => {
     assert.ok(used.has(key) || allowed.has(key), `zh.${key} is never used — delete it`)
   }
 })
+
+test('copy: the two credential switches say what actually happens to a secret', () => {
+  // The delegation switch spends a credential that belongs to ANOTHER
+  // application, so its copy must say so instead of calling it "automatic" or
+  // "convenient". A user who cannot tell the two switches apart cannot make an
+  // informed choice about either.
+  assert.match(en.credDelegateSourcetreeHelp, /BORROWS/)
+  assert.match(en.credDelegateSourcetree, /Sourcetree/)
+  assert.match(zh.credDelegateSourcetreeHelp, /借用/)
+  assert.match(zh.credDelegateSourcetree, /Sourcetree/)
+
+  // And the stored-token switch must name both halves of its guarantee: the
+  // token goes into a FILE, and it never appears on the command line.
+  assert.match(en.credUseStoredTokenHelp, /file/)
+  assert.match(en.credUseStoredTokenHelp, /never the token/)
+  assert.match(zh.credUseStoredTokenHelp, /token/)
+})

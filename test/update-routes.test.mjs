@@ -21,11 +21,13 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { createRealSubprocess } from './helpers/real-subprocess.mjs'
+import { credentialsPath, writeCredentialStore, writeSettings } from '../src/host/credentials.js'
+import { storeFilePath } from '../src/host/gitcredentials.js'
 
 const routesModule = await import('../src/host/routes.js')
 const ENDPOINTS = JSON.parse(readFileSync(new URL('../src/endpoints.json', import.meta.url), 'utf8'))
@@ -77,7 +79,56 @@ function fakeReq(method, body, url = '/') {
 }
 
 /**
- * A throwaway `$DSH_HOME` with one profile containing a `link:` checkout.
+ * The real `fs` service with the dsh LAUNCHER hidden.
+ *
+ * The apply route's whole pipeline runs after its tools are probed, and the
+ * pre-check needs the launcher while the git plan needs git. Hiding only the
+ * launcher (`lib/bin.js`, the one shape `probeDshLauncher` stats) makes the
+ * pipeline stop at its pre-check, which is exactly what a test about the
+ * credential FILE wants: the run is real, but nothing is merged into a synthetic
+ * checkout.
+ *
+ * @returns {object} the `fs` service, with the launcher stat'ed as absent.
+ */
+function fsWithoutLauncher() {
+  const real = realFs()
+  return {
+    ...real,
+    async stat(handle) {
+      if (String(handle?.displayPath ?? '').endsWith('bin.js')) return undefined
+      return real.stat(handle)
+    },
+  }
+}
+
+/**
+ * The real `fs` service that claims a Sourcetree bundle exists.
+ *
+ * Every path mentioning Sourcetree is reported present AND recorded, so a test
+ * can assert both that delegation happened and — more importantly — that a
+ * request with the setting OFF never even looked. Nothing is spawned for the
+ * borrowed git: the path is deliberately one that does not exist, so the
+ * delegated child fails immediately instead of reaching the network.
+ *
+ * @param {string[]} seen - collects every Sourcetree path that was stat'ed.
+ * @returns {object} the `fs` service.
+ */
+function fsWithSourcetree(seen) {
+  const real = realFs()
+  return {
+    ...real,
+    async stat(handle) {
+      const path = String(handle?.displayPath ?? '')
+      if (path.includes('Sourcetree') || path.includes('SourceTree')) {
+        seen.push(path)
+        return { size: 1, isDirectory: false, mtimeMs: 0 }
+      }
+      return real.stat(handle)
+    },
+  }
+}
+
+/** A throwaway `$DSH_HOME` with one profile containing a `link:` checkout.
  *
  * The checkout is a hand-written `.git` (HEAD, a branch, two tags, an origin
  * remote) because `git` is not on PATH on the reference machine (F26).
@@ -410,6 +461,76 @@ test('update routes: apply on a checkout with no git refuses and changes NOTHING
     assert.equal(payload.plan.ok, false)
     assert.match(String(payload.error), /git is required|git is unavailable/)
     assert.equal(readFileSync(join(profileDir, 'package.json'), 'utf8'), before, 'the profile is untouched')
+  })
+})
+
+test('update routes: apply lends the stored token to git as a FILE, and removes it after the run', async () => {
+  await withDeployment(async ({ home }) => {
+    // The user's own token, saved by the user in this plugin's own store. It is
+    // the only secret in play, and it may reach the git child through nothing but
+    // a 0600 file whose path — never whose content — appears in the arguments.
+    const saved = await writeCredentialStore(home, 'github.com', 'ghp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz')
+    assert.equal(saved.ok, true, saved.error ?? '')
+
+    const { routes } = mountRealRoutes({ fs: fsWithoutLauncher() })
+    const res = fakeRes()
+    await routeFor(routes, 'apply').handler(fakeReq('POST', JSON.stringify({ name: 'dsh-power', ref: 'v1.9.0' })), res)
+
+    assert.equal(res.status, 200)
+    const payload = JSON.parse(res.body)
+    const borrowed = storeFilePath(home)
+
+    assert.equal(payload.gitCredential.injected, true, `the token should have been lent: ${JSON.stringify(payload.gitCredential)}`)
+    assert.equal(payload.gitCredential.host, 'github.com')
+    assert.equal(payload.gitCredential.path, borrowed)
+
+    // The command line names the FILE and only the file: an empty helper entry
+    // first (which is what stops the inherited helper from prompting), then this
+    // plugin's own store helper.
+    assert.ok(payload.argv.includes('credential.helper='), 'the inherited helpers are cleared first')
+    assert.ok(payload.argv.includes(`credential.helper=store --file=${borrowed}`), 'and the file is what git is pointed at')
+    assert.ok(!payload.argv.some((part) => String(part).includes('ghp_')), 'no token may enter argv')
+
+    // Nor the HTTP response: the browser is not a place a secret may travel to.
+    assert.ok(!res.body.includes('ghp_'), 'the token must not reach the panel')
+
+    // The file exists for the run and for nothing after it; the user's saved
+    // token is a different thing and must survive.
+    assert.equal(existsSync(borrowed), false, 'the credential file is deleted after the run')
+    assert.equal(existsSync(credentialsPath(home)), true, 'the saved token itself is untouched')
+  })
+})
+
+test('update routes: remote-refs delegates to Sourcetree only when the setting says so', async () => {
+  await withDeployment(async ({ home, checkout }) => {
+    // A host this package implements no API for: the REST path refuses it WITHOUT
+    // going to the network, which is what makes this test runnable offline. The
+    // delegated path never reaches the network either, because the "Sourcetree"
+    // binary the fake fs reports does not exist.
+    put(checkout, '.git/config', '[remote "origin"]\n\turl = https://example.invalid/owner/dsh-power.git\n')
+    const seen = []
+
+    // Default: OFF. The credential delegation would borrow was never handed to
+    // this plugin, so nothing may look for it.
+    const off = mountRealRoutes({ fs: fsWithSourcetree(seen) })
+    const offRes = fakeRes()
+    await routeFor(off.routes, 'remoteRefs').handler(fakeReq('POST', JSON.stringify({ name: 'dsh-power' })), offRes)
+    const offPayload = JSON.parse(offRes.body)
+    assert.equal(offPayload.delegated, undefined, 'the REST path makes no delegation claim')
+    assert.match(String(offPayload.error), /ref-listing API/, 'the REST path is what answered')
+    assert.deepEqual(seen, [], 'nothing even looked for a Sourcetree installation')
+
+    // Opted in: the same machine now delegates.
+    const written = await writeSettings(home, { delegateSourcetree: true })
+    assert.equal(written.ok, true, written.error ?? '')
+    const on = mountRealRoutes({ fs: fsWithSourcetree(seen) })
+    const onRes = fakeRes()
+    await routeFor(on.routes, 'remoteRefs').handler(fakeReq('POST', JSON.stringify({ name: 'dsh-power' })), onRes)
+    const onPayload = JSON.parse(onRes.body)
+    assert.equal(onPayload.delegated, true, JSON.stringify(onPayload))
+    assert.equal(onPayload.provider, 'git')
+    assert.equal(onPayload.tokenUsed, false, 'a delegated listing uses no token of ours')
+    assert.ok(seen.some((path) => path.includes('Sourcetree')), 'the Sourcetree bundle is looked for only now')
   })
 })
 

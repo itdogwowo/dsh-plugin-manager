@@ -550,6 +550,45 @@ dsh-plugin-manager@https://codeload.github.com/.../tar.gz/9ada4ba...:
 | 鑰匙圈來源在無人按框時的行為 | 目前是逾時後放棄；要更聰明的做法得先確認 macOS 有沒有非互動的解讀方式 |
 | `gitremote.js` 的 bearer 改走 stdin | 目前仍在子行程 argv（本節上方已誠實揭露） |
 
+### 7.4 把 token 交給 git 子行程 ＋ 代辦改成 opt-in（2026-09 session）
+
+使用者指示有兩件事：①更新本機 checkout 的 `git fetch`／`git merge` 一直用 PATH 上的 git，
+所以決定「要不要問密碼」的是 OS 的 helper——插件明明握有 token，那條路卻看不到它；
+②代辦（借 Sourcetree 的憑證）**不能預設開**，因為那組憑證是使用者給 Sourcetree 的，不是給這個插件的。
+
+| 新增 | 檔案 | 支撐 |
+|---|---|---|
+| `git store` helper 格式的憑證檔 ＋ 只給一個子行程的 `-c` 參數 ＋ argv 注入 | `src/host/gitcredentials.js` | 本節 |
+| `settings.delegateSourcetree`（預設 **false**）／`settings.useStoredTokenForGit`（預設 **true**） | `src/host/credentials.js` | §4.3 修訂版 |
+| `apply`：判斷主機、寫檔、注入、`finally` 刪檔；`remote-refs`：代辦只在設定為 true 時才執行 | `src/host/routes.js` | — |
+| 兩個開關（可見 label ＋ 說明文字；代辦那個寫明「**借用**」） | `src/client/panel.js`、`src/client/copy.js`、`src/client/styles.js` | §7.3 的 UI 規則 |
+| 12 個單元測試 ＋ 1 個文案測試 ＋ 2 個路由測試（真的跑過 apply、真的刪檔）＋ 2 個渲染測試 | `test/gitcredentials.test.mjs`、`test/copy.test.mjs`、`test/update-routes.test.mjs`、`test/panel-render.test.mjs` | §9 |
+
+**實際送出去的 git 參數**（`<git>` 是 materialise 之後的絕對路徑；路徑有空白才加引號）：
+
+```
+<git> -c credential.helper= -c "credential.helper=store --file=$DSH_HOME/.dsh-pm/git-credentials.tmp" -C <checkout> …
+```
+
+**四個不變式（每一條都有測試）**：
+
+1. **token 不進 argv**：命令列裡只有檔案**路徑**；測試同時斷言 token 在檔案裡、且不在 argv 也不在 HTTP 回應裡。
+2. **檔案 0600 且在 `.dsh-pm/`**：`node:fs` 明寫 mode ＋ 明寫 `chmod`（覆寫會保留舊權限），
+   不在 profile 裡（快照只複製 profile 檔），也不在這個 repo 裡。
+3. **跑完一定刪**：`apply` 用 `finally` 包住整個 pipeline，成功／失敗／例外都刪；刪不掉只回報，不改變那次變更的結論。
+4. **非 git 的 argv 一個字都不加**：`node <dsh bin> …`（add／remove／registry 更新）原樣送回。
+
+> ⚠️ **誠實揭露**：憑證檔在子行程活著的時候**存在於磁碟上**，同機同使用者的一段程式在那段時間讀得到它。
+> 這是 file-based helper 的取捨（與 §7.3 的 argv 取捨同類），不是已解決的問題；它 0600、跑完就刪，如此而已。
+
+**尚未做**：
+
+| 未做 | 為什麼 |
+|---|---|
+| 在真的 `dsh web` ＋ 真瀏覽器上驗這兩個開關 | 本輪只跑了 `npm run verify`（全過）與 `npm test`（新增 17 個測試全過；7 個既有失敗與 HEAD 相同）。面板那兩個開關**沒有**在真宿主上點過 |
+| `remote-refs` 在代辦關閉時把「用哪個 token」講清楚 | REST 路徑只收 `body.token`；面板目前不帶 token，所以預設情況下走未認證的 60 次/小時。要接上 store 是下一步 |
+| Windows 的空白路徑實測 | 引號那條路只在單元測試裡驗過形狀，沒有在 Windows 上真的跑過 |
+
 ---
 
 ## 8. 里程碑

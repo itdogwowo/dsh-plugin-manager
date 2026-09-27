@@ -313,6 +313,14 @@ a.pm-btn{display:inline-flex;align-items:center;text-decoration:none}
 .pm-cred-field{display:flex;flex-direction:column;gap:4px}
 .pm-cred-label{flex:0 0 auto;font-size:11px;font-weight:600}
 .pm-cred-help{font-size:11px;color:var(--dsw-alias-label-secondary,#656d76)}
+/* The two credential switches: a labelled checkbox with its explanation under
+   it, so which credential is being lent (and to whom) is readable without a
+   tooltip. None of these names is a prefix of another — findByClass in the
+   tests is a substring match (docs/plan.md §7.3). */
+.pm-cred-flags{display:flex;flex-direction:column;gap:6px}
+.pm-cred-flag-row{display:flex;flex-direction:column;gap:2px}
+.pm-cred-flag-label{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.pm-cred-flag-name{font-size:11px;font-weight:600}
 /* The armed state of the one destructive control: it reads as a warning BEFORE
    the second press, which is the whole point of arming it. */
 .pm-btn-danger{border-color:var(--dsw-alias-state-error-primary,#cf222e);color:var(--dsw-alias-state-error-primary,#cf222e);font-weight:600}
