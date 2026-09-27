@@ -111,6 +111,144 @@ export function snapshotRoot(profileDir, profileName) {
 }
 
 /**
+ * The name of the probe file the preflight check leaves in the snapshot store.
+ *
+ * ⚠️ It is written and LEFT there, and that is not laziness: the host's `fs`
+ * service has no delete (`dsh-fs` exposes resolve/readText/writeText/listDir/
+ * stat), so a probe that cleaned up after itself would need a capability this
+ * plugin does not have. The file is zero bytes, it lives beside the snapshots it
+ * belongs to, and a future snapshot directory of the same name is the only thing
+ * that could ever collide with it.
+ *
+ * It is also not what the app needs, which is why it exists: the panel asks
+ * BEFORE the user presses a button, so the answer costs one small write instead
+ * of one wasted click.
+ */
+export const WRITE_PROBE_FILENAME = '.dsh-pm-write-probe'
+
+/**
+ * Does `child` sit under `root`, on either platform?
+ *
+ * The separator is required after the prefix on purpose: a bare `startsWith`
+ * would call `C:\Users\<account>-other` a child of `C:\Users\<account>`, and
+ * the panel would then print a `cd` that does not make the snapshot writable.
+ * @param {string} child - the path to test.
+ * @param {string} root - the candidate ancestor.
+ * @returns {boolean} true when the child is at or below the root.
+ */
+export function pathUnder(child, root) {
+  const inner = String(child).replace(/[\\/]+$/, '')
+  const outer = String(root).replace(/[\\/]+$/, '')
+  if (inner.length === 0 || outer.length === 0) return false
+  if (inner === outer) return true
+  const lowered = (value) => (/^[A-Za-z]:/.test(value) ? value.toLowerCase() : value)
+  return lowered(inner).startsWith(`${lowered(outer)}/`) || lowered(inner).startsWith(`${lowered(outer)}\\`)
+}
+
+/**
+ * The work the user has to do for this plugin's writes to be allowed — or null.
+ *
+ * ## What this is for
+ *
+ * The deployment's file sandbox decides one thing this package cannot: whether a
+ * snapshot may be written under `$DSH_HOME`, which is almost always OUTSIDE the
+ * session workspace. Under the shipped default (`workspace-write`) that write is
+ * refused, so every install/update/remove stops at step one — correctly, because
+ * a change that cannot be rolled back must not start. The refusal is right; the
+ * problem is that the user only ever met it AFTER pressing a button.
+ *
+ * So the panel asks first, and the answer is a COMMAND rather than a paragraph:
+ * the writable root is the host's start directory, so starting `dsh web` from an
+ * ancestor of the snapshot store is the whole fix — and the ancestor is computed
+ * here rather than guessed, because the store's depth depends on where the
+ * profiles live.
+ *
+ * @param {string} snapshotDir - the profile's snapshot root.
+ * @param {string} workspaceRoot - the deployment's writable root.
+ * @param {string} [platform] - `process.platform`, injectable for tests.
+ * @returns {{ command: string, ancestor: string, note: string }|null} the fix, or null when one is not needed.
+ */
+export function sandboxRemedy(snapshotDir, workspaceRoot, platform = typeof process !== 'undefined' ? process.platform : 'linux') {
+  const store = str(snapshotDir)
+  const root = str(workspaceRoot)
+  if (store === null || root === null) return null
+  if (pathUnder(store, root)) return null
+
+  const dir = root.replace(/[\\/]+$/, '')
+  if (platform === 'win32') {
+    return {
+      command: `cd ${dir}
+$env:DSH_PERMISSION_MODE = "danger-full-access"
+dsh web`,
+      ancestor: dir,
+      note: 'the writable root is the directory dsh web was started from, so starting it from the folder that contains the profiles is the whole fix; DSH_PERMISSION_MODE is the same escape hatch the host documents',
+    }
+  }
+  return {
+    command: `cd ${dir} && DSH_PERMISSION_MODE=danger-full-access dsh web`,
+    ancestor: dir,
+    note: 'the writable root is the directory dsh web was started from, so starting it from the directory that contains the profiles is the whole fix; DSH_PERMISSION_MODE is the same escape hatch the host documents',
+  }
+}
+
+/**
+ * Can this deployment store a snapshot right now?
+ *
+ * One small write, and the ANSWER is the outcome — nothing is inferred from
+ * permissions, ownership or a mode bit, because the thing being tested is a
+ * policy inside another process. A refusal is reported with the sandbox's own
+ * words plus the command that ends it (`sandboxRemedy`).
+ *
+ * Never throws, never writes outside the snapshot root, and writes nothing at all
+ * when it can already tell that the store is readable.
+ *
+ * @param {object} fs - the resolved `fs` service.
+ * @param {object} input - `{ profileDir, profileName, workspaceRoot }`.
+ * @returns {Promise<object>} plain-JSON status.
+ */
+export async function checkSnapshotWrite(fs, input) {
+  const profileDir = str(input?.profileDir)
+  const profileName = str(input?.profileName) ?? 'default'
+  const workspaceRoot = str(input?.workspaceRoot)
+  const out = { ok: false, state: 'unknown', dir: null, writableRoot: workspaceRoot, probePath: null, observed: null, error: null, remedy: null }
+
+  if (profileDir === null) {
+    out.error = 'no profile directory was resolved, so the snapshot store cannot be located'
+    return out
+  }
+  if (fs === undefined || fs === null || typeof fs.writeText !== 'function') {
+    out.error = 'the fs service cannot write, so no snapshot could be stored'
+    return out
+  }
+
+  out.dir = snapshotRoot(profileDir, profileName)
+  out.remedy = sandboxRemedy(out.dir, workspaceRoot)
+  out.probePath = joinPath(out.dir, WRITE_PROBE_FILENAME)
+
+  // A store that can be LISTED is readable, and readable is not the question —
+  // so nothing is concluded here. It only saves the probe when the directory is
+  // missing entirely, where the failure would be ENOENT rather than a policy.
+  try {
+    await fs.listDir(await fs.resolve(out.dir))
+    out.observed = 'the snapshot store already exists'
+  } catch {
+    out.observed = 'the snapshot store does not exist yet; the first write creates it'
+  }
+
+  try {
+    await fs.writeText(await fs.resolve(out.probePath), '')
+    out.ok = true
+    out.state = 'ready'
+    return out
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    out.state = /denied|sandbox|EPERM|EACCES/i.test(message) ? 'blocked' : 'error'
+    out.error = message
+    return out
+  }
+}
+
+/**
  * A filesystem-safe, sortable snapshot id.
  * @param {string} label - what the change was.
  * @param {number} [at] - epoch milliseconds.

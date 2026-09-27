@@ -1013,6 +1013,69 @@ commit 沒有被刪掉——它仍然在摺疊區，因為它回答的是**另�
 > 我手上有三個 checkout，只讀了自己那一個就下結論。
 > 三個檔案讀完不用一分鐘——**省下的卻是我兩輪來回的時間**。
 
+### F40 ⛔ 「安裝按下去什麼都沒發生」——可寫根目錄是**宿主啟動時的 cwd**
+
+`[使用者]`（Windows 新機器）：按下安裝 → 立刻「寫入被拒」→ 回滾區說「沒有東西要還原」。
+
+#### 1. 拒絕的來源，逐行對到宿主源碼
+
+`@deepseek-ai/dsh-base/cordis.patch.yml`：
+
+```yaml
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+    workspaceRoot: !!js process.cwd()
+- id: approval
+  config:
+    policy: !!js "(process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask'"
+```
+
+而 `dsh-fs-sandbox` 的 `checkedTarget()`：
+
+- `danger-full-access` → 直接放行；
+- `read-only` → `FS_SANDBOX_DENIED`；
+- `workspace-write` → 重新 realpath，要求落在 `writableRoots(policy)` 之內，否則
+  `cannot write "…": file access denied under workspace-write mode`。
+
+**所以可寫根目錄 ＝ `process.cwd()` ＝ 你啟動 `dsh web` 時所在的那個資料夾。**
+快照在 `$DSH_HOME/.dsh-pm/profiles/<p>/snapshots`（`snapshot.js`），Windows 上那是
+`C:\Users\<account>\.dsh\…`，而使用者是從桌面專案目錄啟動的 ⇒ 兩者不同樹 ⇒ 拒絕。
+**這是刻意的 fail-closed，不是 bug**：回滾要寫回同一批檔案，快照存不下就不能開始。
+
+#### 2. 一個關鍵的區分：**只有 `fs` 服務的寫入受柵欄管**
+
+`src/host/*.js` 走 `node:fs` 直接寫的東西（`.dsh-pm/credentials.json`、`settings.json`、
+patch 檔）**不受影響**——它們是宿主行程自己的 Node 呼叫。真正被擋的只有經過 `fs` 服務的
+快照／還原。這也是為什麼面板其他功能（憑證、設定、停用）在那台機器上仍然可用。
+
+#### 3. 逃生門有兩個，差別在「放寬多少」
+
+| 做法 | 效果 | 代價 |
+|---|---|---|
+| 從 profile 的**祖先目錄**啟動 `dsh web`（例如 `C:\Users\<account>\`） | 只讓那棵樹可寫 | 工作目錄變成家目錄 |
+| `DSH_PERMISSION_MODE=danger-full-access` | 整個部署不設防，approval 也變 `never` | 最大 |
+
+⚠️ **面板的寫入不帶 session**，所以對話的存取權限 preset 對它無效——只有這兩個部署層做法。
+**而且 `sandboxPolicy` 是「每次呼叫」的參數**（`writeText(target, content, expected, signal, sandboxPolicy)`，
+省略時才回退到部署預設）。也就是說，插件**技術上可以**在寫快照時自己塞一份
+`{ mode: 'danger-full-access' }` 進去把柵欄繞掉——**本插件不做這件事**（README 承諾：
+不替自己要求更寬的模式）。要放寬就是使用者在部署層放寬。
+
+#### 4. 修法：把「事後被拒」變成「事前看得到 ＋ 一行指令」
+
+- `checkSnapshotWrite()`（`snapshot.js`）：對快照根目錄寫一個 0 byte 探針檔
+  （`.dsh-pm-write-probe`），**答案就是結果本身**——不從權限位元推論，因為被測的是另一個
+  行程裡的政策。⚠️ 探針檔寫了就留著：`dsh-fs` 沒有 delete，這是能力限制不是偷懒。
+- `sandboxRemedy()`：用宿主自己的 `process.cwd()` 當可寫根目錄，只有當快照不在它底下時才
+  給指令；Windows 給 PowerShell 三行，其他平台給 `cd … && DSH_PERMISSION_MODE=… dsh web`。
+- `buildBackend()` 因此**變成 async**（它現在會做一次小寫入），結果掛在 `backend.snapshotStore`，
+  面板在「環境」區顯示，並附複製鈕——**在你按按鈕之前**。
+
+> **教訓：一個「正確的拒絕」如果在錯的時間出現，使用者感受到的仍然是壞掉。**
+> 事實要早講，而且要附上那行能改變事實的指令。
+
 ### F39 ⛔⛔ `dsh plugin` 是 pnpm 的轉送器——**每一種 git spec 裝出來都沒有 `.git`**
 
 `[測]`（pnpm 12.4.1，macOS，`/tmp` 拋棄式目錄）

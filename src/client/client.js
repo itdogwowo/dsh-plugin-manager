@@ -197,6 +197,18 @@ window.__ModuleLoader__.load({
         installRefused: '這個 spec 不被接受：',
         installByHand: '要裝它的話，用官方 CLI 自己貼：',
       
+        // ── 快照存放處：能不能寫 ───────────────────────────────────────────────────
+        //
+        // 「安裝按下去什麼都沒發生」的真正原因。快照在 $DSH_HOME 底下，而
+        // workspace-write 的可寫根目錄是宿主啟動時所在的資料夾——兩者不在同一棵樹時，
+        // 管線依設計在第一步就拒絕。這幾句把它變成事先看得到的事實 ＋ 一行指令。
+        snapshotStore: '快照存放處',
+        snapshotStoreReady: '寫得進去（變更可以開始）',
+        snapshotStoreBlocked: '⚠ 寫不進去——安裝／更新／移除會在第一步就拒絕',
+        snapshotStorePath: '路徑',
+        snapshotStoreFix: '要讓它寫得進去',
+        snapshotStoreNote: '沙箱的可寫根目錄是你啟動 dsh web 時所在的資料夾，而快照在 $DSH_HOME 底下——從上面那個資料夾啟動就解決了（比較乾淨，不用放寬模式）。DSH_PERMISSION_MODE 是宿主自己的逃生門，整台機器都會放寬。兩種都要重啟 dsh web 才生效。官方 CLI（dsh plugin add）不經過這道柵欄，代價是沒有快照、不會自動回滾。',
+      
         at: '讀取時間',
         profile: 'profile',
         manifest: 'manifest',
@@ -438,6 +450,20 @@ window.__ModuleLoader__.load({
         installResultSpec: 'The profile now records',
         installRefused: 'That spec is not accepted:',
         installByHand: 'To install it anyway, paste this into a terminal yourself:',
+      
+        // ── the snapshot store: can it be written? ─────────────────────────────────
+        //
+        // The real reason "the install button did nothing". The store lives under
+        // $DSH_HOME while the writable root under `workspace-write` is the directory
+        // `dsh web` was started from — when they are not in the same tree, the pipeline
+        // refuses at step one by design. These strings turn that into a fact the user
+        // can see BEFORE pressing anything, plus the command that ends it.
+        snapshotStore: 'Snapshot store',
+        snapshotStoreReady: 'writable (a change can start)',
+        snapshotStoreBlocked: '⚠ not writable — install/update/remove refuse at step one',
+        snapshotStorePath: 'path',
+        snapshotStoreFix: 'To make it writable',
+        snapshotStoreNote: 'The sandbox\u2019s writable root is the directory `dsh web` was started from, and the store lives under $DSH_HOME — so starting it from the folder above fixes this (cleaner: no mode is widened). DSH_PERMISSION_MODE is the host\u2019s own escape hatch and widens the whole machine. Either way, restart `dsh web`. The official CLI (dsh plugin add) does not pass this fence — the price is no snapshot and no automatic rollback.',
       
         at: 'read at',
         profile: 'profile',
@@ -3449,6 +3475,43 @@ window.__ModuleLoader__.load({
               'backend',
               `fs=${backend.fs === 'ready' ? t('backendReady') : t('backendAbsent')} · clientModules=${backend.clientModules === 'ready' ? t('backendReady') : t('backendAbsent')}`,
             ])
+            // Whether a change could be stored, answered BEFORE a button is pressed.
+            // Under the shipped `workspace-write` default the snapshot store is outside
+            // the writable root, so every install/update/remove refuses at step one —
+            // correctly, and uselessly, when the user only finds out by pressing it.
+            // The host checks, and the remedy is a command that can be copied.
+            const store = backend.snapshotStore
+            if (store !== null && store !== undefined && store.dir !== null && store.dir !== undefined) {
+              envRows.push([
+                t('snapshotStore'),
+                store.ok === true
+                  ? `${t('snapshotStoreReady')} · ${t('snapshotStorePath')} ${String(store.dir)}`
+                  : h(
+                      'span',
+                      null,
+                      `${t('snapshotStoreBlocked')} · ${t('snapshotStorePath')} ${String(store.dir)}`,
+                      store.error === null || store.error === undefined ? null : h('div', { className: 'pm-upd-note pm-upd-note-bad pm-break' }, String(store.error)),
+                      store.remedy === null || store.remedy === undefined
+                        ? null
+                        : h(
+                            'div',
+                            { className: 'pm-upd-fix', key: 'snapshot-store-remedy' },
+                            h('div', { className: 'pm-upd-fix-title' }, t('snapshotStoreFix')),
+                            h(
+                              'div',
+                              { className: 'pm-upd-fix-cmd' },
+                              h('code', { className: 'pm-mono pm-break' }, String(store.remedy.command)),
+                              h(
+                                'button',
+                                { type: 'button', className: 'pm-btn pm-btn-sm', onClick: () => props.onCopy(String(store.remedy.command)) },
+                                t('updateCopy'),
+                              ),
+                            ),
+                            h('div', { className: 'pm-upd-note' }, t('snapshotStoreNote')),
+                          ),
+                    ),
+              ])
+            }
           }
       
           const foot =

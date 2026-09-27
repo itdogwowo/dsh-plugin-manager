@@ -131,19 +131,50 @@ test('overview: a throwing pluginInventory.list() is contained in inventory', as
   assert.match(out.inventory.error, /nope/)
 })
 
-test('backend: reports which optional services resolved', () => {
-  const absent = buildBackend(reader({}))
+test('backend: reports which optional services resolved', async () => {
+  const absent = await buildBackend(reader({}))
   assert.equal(absent.clientModules, 'absent')
   assert.equal(absent.pluginInventory, 'absent')
   assert.equal(absent.fs, 'absent')
   assert.equal(absent.node, process.versions.node)
   assert.equal(absent.platform, process.platform)
   assert.ok(Array.isArray(absent.profileCandidates))
+  // With no fs there is nothing to ask about the snapshot store, and the answer
+  // says WHICH capability is missing rather than reporting a refusal.
+  assert.equal(absent.snapshotStore.ok, false)
+  assert.match(absent.snapshotStore.error, /fs service cannot write/)
 
-  const ready = buildBackend(reader({ clientModules: {}, pluginInventory: {}, fs: {} }))
+  const ready = await buildBackend(reader({ clientModules: {}, pluginInventory: {}, fs: {} }))
   assert.equal(ready.clientModules, 'ready')
   assert.equal(ready.pluginInventory, 'ready')
   assert.equal(ready.fs, 'ready')
+})
+
+test('backend: the snapshot store is CHECKED, not assumed', async () => {
+  // The fact the panel used to learn too late. `buildBackend` answers whether a
+  // change could be STORED right now, with the fs service's own words when it
+  // cannot — and, when the store sits outside the writable root, the command that
+  // moves the writable root instead of a paragraph about sandboxes.
+  const refused = {
+    resolve: async (path) => ({ displayPath: String(path) }),
+    listDir: async () => [],
+    writeText: async () => {
+      throw new Error('cannot write "x": file access denied under workspace-write mode')
+    },
+  }
+  const out = await buildBackend(reader({ fs: refused }))
+
+  assert.equal(out.snapshotStore.ok, false)
+  assert.equal(out.snapshotStore.state, 'blocked')
+  assert.match(out.snapshotStore.error, /workspace-write/)
+  assert.match(out.snapshotStore.dir, /snapshots$/)
+  assert.ok(out.snapshotStore.probePath.endsWith('.dsh-pm-write-probe'), 'the check writes its own probe, beside the snapshots')
+  // The store is under $DSH_HOME and this test runs from the repository, so the
+  // two are never in the same tree here — which is exactly the deployment the
+  // remedy exists for.
+  assert.notEqual(out.snapshotStore.remedy, null, 'a remedy is offered when the store is outside the writable root')
+  assert.match(out.snapshotStore.remedy.command, /DSH_PERMISSION_MODE=danger-full-access/)
+  assert.ok(Array.isArray(out.snapshotStore.remedy.command.split('\n')), 'the command is text a user can copy and read')
 })
 
 // ── enabled / disabled, resolved per plugin ─────────────────────────────────

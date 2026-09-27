@@ -1588,6 +1588,43 @@ export function createPanel(react, makeUpdatePanel) {
         'backend',
         `fs=${backend.fs === 'ready' ? t('backendReady') : t('backendAbsent')} · clientModules=${backend.clientModules === 'ready' ? t('backendReady') : t('backendAbsent')}`,
       ])
+      // Whether a change could be stored, answered BEFORE a button is pressed.
+      // Under the shipped `workspace-write` default the snapshot store is outside
+      // the writable root, so every install/update/remove refuses at step one —
+      // correctly, and uselessly, when the user only finds out by pressing it.
+      // The host checks, and the remedy is a command that can be copied.
+      const store = backend.snapshotStore
+      if (store !== null && store !== undefined && store.dir !== null && store.dir !== undefined) {
+        envRows.push([
+          t('snapshotStore'),
+          store.ok === true
+            ? `${t('snapshotStoreReady')} · ${t('snapshotStorePath')} ${String(store.dir)}`
+            : h(
+                'span',
+                null,
+                `${t('snapshotStoreBlocked')} · ${t('snapshotStorePath')} ${String(store.dir)}`,
+                store.error === null || store.error === undefined ? null : h('div', { className: 'pm-upd-note pm-upd-note-bad pm-break' }, String(store.error)),
+                store.remedy === null || store.remedy === undefined
+                  ? null
+                  : h(
+                      'div',
+                      { className: 'pm-upd-fix', key: 'snapshot-store-remedy' },
+                      h('div', { className: 'pm-upd-fix-title' }, t('snapshotStoreFix')),
+                      h(
+                        'div',
+                        { className: 'pm-upd-fix-cmd' },
+                        h('code', { className: 'pm-mono pm-break' }, String(store.remedy.command)),
+                        h(
+                          'button',
+                          { type: 'button', className: 'pm-btn pm-btn-sm', onClick: () => props.onCopy(String(store.remedy.command)) },
+                          t('updateCopy'),
+                        ),
+                      ),
+                      h('div', { className: 'pm-upd-note' }, t('snapshotStoreNote')),
+                    ),
+              ),
+        ])
+      }
     }
 
     const foot =

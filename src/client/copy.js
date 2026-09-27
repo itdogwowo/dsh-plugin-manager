@@ -174,6 +174,18 @@ export const zh = {
   installRefused: '這個 spec 不被接受：',
   installByHand: '要裝它的話，用官方 CLI 自己貼：',
 
+  // ── 快照存放處：能不能寫 ───────────────────────────────────────────────────
+  //
+  // 「安裝按下去什麼都沒發生」的真正原因。快照在 $DSH_HOME 底下，而
+  // workspace-write 的可寫根目錄是宿主啟動時所在的資料夾——兩者不在同一棵樹時，
+  // 管線依設計在第一步就拒絕。這幾句把它變成事先看得到的事實 ＋ 一行指令。
+  snapshotStore: '快照存放處',
+  snapshotStoreReady: '寫得進去（變更可以開始）',
+  snapshotStoreBlocked: '⚠ 寫不進去——安裝／更新／移除會在第一步就拒絕',
+  snapshotStorePath: '路徑',
+  snapshotStoreFix: '要讓它寫得進去',
+  snapshotStoreNote: '沙箱的可寫根目錄是你啟動 dsh web 時所在的資料夾，而快照在 $DSH_HOME 底下——從上面那個資料夾啟動就解決了（比較乾淨，不用放寬模式）。DSH_PERMISSION_MODE 是宿主自己的逃生門，整台機器都會放寬。兩種都要重啟 dsh web 才生效。官方 CLI（dsh plugin add）不經過這道柵欄，代價是沒有快照、不會自動回滾。',
+
   at: '讀取時間',
   profile: 'profile',
   manifest: 'manifest',
@@ -415,6 +427,20 @@ export const en = {
   installResultSpec: 'The profile now records',
   installRefused: 'That spec is not accepted:',
   installByHand: 'To install it anyway, paste this into a terminal yourself:',
+
+  // ── the snapshot store: can it be written? ─────────────────────────────────
+  //
+  // The real reason "the install button did nothing". The store lives under
+  // $DSH_HOME while the writable root under `workspace-write` is the directory
+  // `dsh web` was started from — when they are not in the same tree, the pipeline
+  // refuses at step one by design. These strings turn that into a fact the user
+  // can see BEFORE pressing anything, plus the command that ends it.
+  snapshotStore: 'Snapshot store',
+  snapshotStoreReady: 'writable (a change can start)',
+  snapshotStoreBlocked: '⚠ not writable — install/update/remove refuse at step one',
+  snapshotStorePath: 'path',
+  snapshotStoreFix: 'To make it writable',
+  snapshotStoreNote: 'The sandbox\u2019s writable root is the directory `dsh web` was started from, and the store lives under $DSH_HOME — so starting it from the folder above fixes this (cleaner: no mode is widened). DSH_PERMISSION_MODE is the host\u2019s own escape hatch and widens the whole machine. Either way, restart `dsh web`. The official CLI (dsh plugin add) does not pass this fence — the price is no snapshot and no automatic rollback.',
 
   at: 'read at',
   profile: 'profile',

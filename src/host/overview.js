@@ -14,9 +14,10 @@
  * of throwing inside a route handler.
  */
 
-import { buildPluginInventory, profileDirCandidates } from './profile.js'
+import { buildPluginInventory, profileDir, profileDirCandidates } from './profile.js'
 import { resolveEnabledState } from './enabled.js'
 import { readGitState } from './detect.js'
+import { checkSnapshotWrite } from './snapshot.js'
 
 /** This package's own name, flagged in the inventory rather than hidden. */
 export const SELF_NAME = 'dsh-plugin-manager'
@@ -408,18 +409,32 @@ export async function buildOverview(get) {
  * @param {(name: string) => unknown} get - optional-service reader.
  * @returns {object} plain-JSON snapshot.
  */
-export function buildBackend(get) {
+export async function buildBackend(get) {
   const clientModules = get('clientModules')
   const inventory = get('pluginInventory')
   const fs = get('fs')
   const subprocess = get('subprocess')
   const candidates = profileDirCandidates()
+  const located = profileDir()
 
   return {
     clientModules: clientModules === undefined || clientModules === null ? 'absent' : 'ready',
     pluginInventory: inventory === undefined || inventory === null ? 'absent' : 'ready',
     fs: fs === undefined || fs === null ? 'absent' : 'ready',
     subprocess: subprocess === undefined || subprocess === null ? 'absent' : 'ready',
+    // Whether a snapshot can be STORED right now, asked before the user presses
+    // anything. Under the shipped `workspace-write` default the answer is usually
+    // no — the store lives under `$DSH_HOME`, outside the session workspace — and
+    // every change then stops at step one by design. Meeting that as a refused
+    // button is a wasted click; meeting it here, with the command that fixes it,
+    // is the same fact at the moment it is useful.
+    // The writable root is `process.cwd()` in the host's own configuration, which
+    // is what makes the remedy a `cd` rather than a config edit.
+    snapshotStore: await checkSnapshotWrite(fs, {
+      profileDir: located === null ? null : located.dir,
+      profileName: located === null ? null : located.name,
+      workspaceRoot: typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : null,
+    }),
     // Every candidate is reported, not just the first: the whole difficulty is
     // that the profile location is inferred rather than told to us.
     profileCandidates: candidates.map((candidate) => `${candidate.dir} (${candidate.source})`),

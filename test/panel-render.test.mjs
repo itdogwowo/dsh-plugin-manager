@@ -270,6 +270,10 @@ function backend() {
     clientModules: 'ready',
     pluginInventory: 'absent',
     fs: 'ready',
+    // The store check rides on this report, and the list of payloads above must
+    // keep carrying it: the panel reads `backend.snapshotStore` on every render,
+    // so a fixture without it would test a payload the host no longer sends.
+    snapshotStore: { ok: true, state: 'ready', dir: '/home/user/.dsh/.dsh-pm/profiles/web/snapshots', writableRoot: '/home/user/', probePath: null, observed: null, error: null, remedy: null },
     profileCandidates: ['/home/user/.dsh/profiles/web (fs-base)'],
     node: '22.0.0',
     platform: 'linux',
@@ -1990,4 +1994,43 @@ test('panel: the update panel turns the record into two copyable commands', asyn
   // before its refs request comes back, and the reason must not arrive late.
   const early = openPanel({ phase: 'loading', data: null }, row)
   assert.equal(findByClass(early, 'Recovery')[0].props.recovery.reason, 'archiveFromSpec', 'the reason is there before the refs request finishes')
+})
+
+test('panel: a blocked snapshot store is reported BEFORE the button is pressed', async () => {
+  // The deployment this exists for: a fresh machine where `dsh web` was started
+  // outside `$DSH_HOME`, so every install/update/remove stops at step one because
+  // the snapshot cannot be stored. The refusal is correct; what was wrong is that
+  // the user only met it AFTER pressing 安裝. The environment section now answers
+  // it up front, with the command that fixes the writable root.
+  const blocked = {
+    ...backend(),
+    snapshotStore: {
+      ok: false,
+      state: 'blocked',
+      dir: 'C:\\Users\\<account>\\.dsh\\.dsh-pm\\profiles\\web\\snapshots',
+      writableRoot: 'C:\\Users\\<account>\\Desktop\\proj',
+      probePath: 'C:\\Users\\<account>\\.dsh\\.dsh-pm\\profiles\\web\\snapshots\\.dsh-pm-write-probe',
+      observed: 'the snapshot store does not exist yet; the first write creates it',
+      error: 'cannot write "…": file access denied under workspace-write mode',
+      remedy: {
+        command: 'cd C:\\Users\\<account>\r\n$env:DSH_PERMISSION_MODE = "danger-full-access"\r\ndsh web',
+        ancestor: 'C:\\Users\\<account>',
+        note: 'the writable root is the directory dsh web was started from',
+      },
+    },
+  }
+  const tree = await renderPanel({ ...overview(), backend: blocked }, { renders: 1 })
+  const text = textOf(tree).join(' ')
+
+  assert.match(text, /T:snapshotStore/, 'the environment section names the store')
+  assert.match(text, /T:snapshotStoreBlocked/, 'and says it is not writable')
+  assert.ok(text.includes('snapshots'), 'the path is on screen, so the reader can see WHICH directory was refused')
+  assert.match(text, /T:snapshotStoreFix/, 'the fix is offered as its own block')
+  assert.ok(text.includes('DSH_PERMISSION_MODE'), 'the command itself is on screen, not a description of it')
+
+  // And a store that IS writable renders as a quiet status — no command, no alarm.
+  const ready = { ...backend(), snapshotStore: { ...blocked.snapshotStore, ok: true, state: 'ready', error: null, remedy: null } }
+  const readyText = textOf(await renderPanel({ ...overview(), backend: ready }, { renders: 1 })).join(' ')
+  assert.match(readyText, /T:snapshotStoreReady/)
+  assert.equal(readyText.includes('DSH_PERMISSION_MODE'), false, 'nothing to fix, so nothing is offered')
 })
