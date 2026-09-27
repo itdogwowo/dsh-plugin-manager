@@ -110,7 +110,8 @@ git／tarball 來源的插件（本機 profile 裡就有）拿不到版本比對
 | 裝**之前**自動快照 | ✅ | 純檔案 I/O；快照存不下就**不開始**變更 |
 | 用官方 CLI 當唯一寫入器 | ✅ | 不自己實作 pnpm 語意 |
 | 裝**之後**即時再驗 + 自動回滾 | ✅ | 回滾後逐檔雜湊比對，證明狀態一致 |
-| 更新：選版本／選分支（git 來源） | ✅ | 本機 ref 直接讀 `.git`；遠端要按按鈕才連網 |
+| 更新：選版本／選分支（本地 checkout） | ✅ | 本機 ref 直接讀 `.git`；遠端要按按鈕才連網 |
+| 更新：`github:`／tarball 安裝 | ❌ | pnpm 裝的是壓縮包，**目錄裡沒有 `.git`**——面板會說明原因並給出轉成 `link:` checkout 的兩行指令 |
 | 更新：registry／tarball 來源 | 🟡 | 只能用原本的 spec 重新解析；**新版本要查 registry 才知道，本插件不假裝知道** |
 | 面板（bundle 清單／verify／快照 diff／一鍵回滾） | 🟡 | 清單、檢查、更新、啟停都有；快照 diff 檢視還沒有 |
 | 驗證 import 期失敗（`ERR_MODULE_NOT_FOUND` 等） | ❌ | 只有真正啟動一次才會出現 |
@@ -150,7 +151,15 @@ git／tarball 來源的插件（本機 profile 裡就有）拿不到版本比對
   ——代價是沒有快照、不會自動回滾。
 - **移動本地 git checkout 需要 `git` 執行檔**，而參考機器上沒有。
   這個功能會明說缺什麼、給你該平台的安裝指令與官方連結，但**不會**替你安裝。
-  在那之前，本地 checkout 的更新只能走替代做法（改來源為 `github:<owner>/<repo>#<ref>`）。
+  在那之前，本地 checkout 的更新只能走替代做法（把來源改成 `link:<你 clone 的位置>`）。
+- ⛔ **`github:`／tarball spec 裝出來的插件，目錄裡沒有 `.git`——這是 pnpm 的行為，不是壞掉。**
+  `dsh plugin` 只是 pnpm 的轉送器，而 pnpm 對**每一種** git-hosted spec（`github:owner/repo`、
+  `github:owner/repo#v1.2.3`、`https://github.com/…/main.tar.gz`）都是抓 codeload 的 tar.gz 來解，
+  **不會 clone**（pnpm 12.4.1 實測：解開後只有 `index.js`／`package.json`／`README.md`／`LICENSE`）。
+  後果是這一類安裝的「載入版本」「查遠端」「commit」全部無從回答——不是暫時讀不到，是永遠不會有。
+  `#ref` 只釘住**內容**，不會帶來歷史。面板現在會**說出原因**，並給出兩行可複製的指令
+  （`git clone` ＋ `dsh plugin --profile <n> add "link:<路徑>"`）把它換成可選版本、可更新的 checkout。
+  面板**不會**替你執行那兩行，clone 到哪裡由你決定。
 - **遠端 ref 查詢只實作了 github.com**。其他 host 會回「這個 host 沒有實作」——
   那不是「沒有新版」。
 - **DSH 版本相依**：實測基準是 `0.1.5-rc.3`。宿主升級後
@@ -165,6 +174,8 @@ git／tarball 來源的插件（本機 profile 裡就有）拿不到版本比對
 面板最上面有**安裝欄位**（清單讀得到 profile 時才出現）：
 
 1. 輸入套件名或 spec（`some-plugin`、`^1.2.0`、`github:owner/repo#v1.0.0`、`link:../your-checkout`）
+   ⚠️ `github:`／tarball spec 裝出來的是**解壓縮的壓縮包**（沒有 `.git`，不能選版本；見「限制」）。
+   要能選版本、能更新，只有 `link:` 指向本機 clone 這一種。
 2. 按「檢查計畫」→ 面板先顯示**會跑的完整指令**、`dsh` 啟動器在不在、
    以及這會是「新增」還是「改寫已記錄的 spec」
 3. 計畫可執行時才會出現「安裝」鈕 → 走完整管道：裝前驗 → 快照 → 執行 → 再驗 → 失敗自動回滾

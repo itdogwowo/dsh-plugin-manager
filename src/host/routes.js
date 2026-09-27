@@ -294,9 +294,15 @@ function refsHandler(get) {
       const target = plugin ?? null
       const root = target === null ? null : parentOf(target.resolvedDir)
       if (root === null) {
+        // A `link:` whose target no longer resolves lands here, and "records no
+        // resolved directory" describes the machinery rather than the fault. The
+        // recovery record is what names the path the spec points at, so it is
+        // carried on this refusal too — this is the same bug class as the archive
+        // case below: a true message that leaves the reader nowhere to go.
         sendJson(res, 200, {
           ok: false,
           name,
+          recovery: target?.recovery ?? null,
           error:
             name === null
               ? 'a name is required: ?name=<package>'
@@ -313,6 +319,13 @@ function refsHandler(get) {
         spec: target.spec,
         sourceType: target.sourceType,
         checkoutRoot: root,
+        // Why there is nothing to list, when there is nothing to list — and the
+        // two commands that fix it. The refusal below is true and unhelpful on
+        // its own: "no .git/HEAD and no .git file" does not tell the reader that
+        // pnpm installs every git spec as an ARCHIVE, which is the whole reason
+        // the directory has no `.git`. Carried on the inventory row, so the card
+        // and this route cannot disagree about the reason.
+        recovery: target.recovery ?? null,
         local,
         remote,
         // The `git` TOOL is not probed here: listing local refs needs no

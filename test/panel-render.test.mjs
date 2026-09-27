@@ -214,6 +214,7 @@ async function renderPanel(payload, options = {}) {
   renderPanel.__PluginCard = entry.component.__PluginCard
   renderPanel.__InstallField = entry.component.__InstallField
   renderPanel.__CredentialsSection = entry.component.__CredentialsSection
+  renderPanel.__recoveryKeyOf = entry.component.__recoveryKeyOf
   renderPanel.__update = entry.component.__update
   // The stub itself, so a test can drive a card's own hooks (see the update
   // trigger case): a card's state is not reachable from the tree it returns.
@@ -1854,3 +1855,139 @@ test('credentials: a switch an older host half does not report is disabled, not 
 
 
 
+
+/**
+ * The recovery record as the host sends it for an ARCHIVE install.
+ *
+ * Shaped after the real `refs` response, which is what the panel parses: the spec
+ * is a tarball URL, so pnpm unpacked it and there is no `.git` anywhere.
+ */
+function archiveRecovery() {
+  return {
+    applies: true,
+    sourceKind: 'tarball',
+    reason: 'archiveFromSpec',
+    repoUrl: 'https://github.com/itdogwowo/dsh-tavern',
+    owner: 'itdogwowo',
+    repo: 'dsh-tavern',
+    dir: '/Users/<user>/.dsh/profiles/web/node_modules/dsh-tavern',
+    spec: 'https://github.com/itdogwowo/dsh-tavern/archive/refs/heads/main.tar.gz',
+    commands: {
+      clone: 'git clone https://github.com/itdogwowo/dsh-tavern <你放 clone 的位置>',
+      link: 'dsh plugin --profile web add "link:<你放 clone 的位置>"',
+      spec: 'link:<你放 clone 的位置>',
+    },
+  }
+}
+
+test('panel: an archive install says why it has no version history, on the card', async () => {
+  // The failure this exists for: the card showed NO `commit` row for an archive
+  // install, and an absent row is indistinguishable from "not read yet" — while
+  // the only other place the truth could appear is a button whose two controls
+  // cannot work for this install.
+  await renderPanel(withPlugins([pluginRow({ name: 'archive-tool' })]), { renders: 1 })
+  const keyOf = renderPanel.__recoveryKeyOf
+  assert.notEqual(keyOf, undefined, 'the recovery rule must be reachable for this assertion')
+
+  // The rule is `applies && no commit`, and BOTH halves are load-bearing: the
+  // first comes from the spec, the second from whether the host resolved a commit.
+  // Either alone produces a wrong row — a checkout whose HEAD could not be read
+  // relabelled as a pnpm problem, or an archive with no explanation at all.
+  assert.equal(keyOf({ recovery: archiveRecovery() }), 'recoverArchiveSpec')
+  assert.equal(
+    keyOf({ recovery: archiveRecovery(), gitCommit: 'a'.repeat(40) }),
+    null,
+    'a row WITH a commit has nothing to recover from, whatever the spec says',
+  )
+  assert.equal(keyOf({ recovery: { applies: false, reason: 'linkNoRepo' } }), null, 'a record that does not apply is not shown')
+  assert.equal(keyOf({ recovery: { applies: true, reason: 'linkNoRepo' } }), 'recoverLinkNoRepo', 'a link with no .git gets its own sentence')
+
+  const PluginCard = renderPanel.__PluginCard
+  const card = PluginCard(cardProps(pluginRow({ name: 'archive-tool', sourceType: 'tarball-url', recovery: archiveRecovery() })))
+  const meta = findByClass(card, 'Meta')[0]
+  assert.notEqual(meta, undefined, 'the diagnostics block must be reachable')
+  const labels = meta.props.rows.filter((row) => row !== null && row !== undefined).map((row) => String(row[0]))
+  assert.ok(labels.includes('T:recoverRowLabel'), `the fold must carry the reason — found ${labels.join(', ')}`)
+})
+
+test('panel: the update panel turns the record into two copyable commands', async () => {
+  // What the reader needs at the moment the buttons fail: not a description of
+  // the failure but the two lines that end it. The panel still runs neither —
+  // `copyText` is the whole interaction.
+  await renderPanel(withPlugins([pluginRow({ name: 'archive-tool' })]), { renders: 1 })
+  const upd = renderPanel.__update
+  const t = (key) => `T:${key}`
+  const copied = []
+
+  // The block is invoked the way the panel invokes it: its two commands and its
+  // copy buttons only exist after that call (a component descriptor is not a
+  // rendered tree in this harness).
+  const block = upd.Recovery({ t, copyText: (text) => copied.push(text), recovery: archiveRecovery() })
+  assert.notEqual(block, null, 'an applicable record renders a block')
+
+  const text = textOf(block).join(' ')
+  assert.match(text, /T:recoverTitle/, 'the block is titled')
+  assert.match(text, /T:recoverArchiveSpec/, 'and carries the reason, in words')
+  assert.match(text, /git clone https:\/\/github\.com\/itdogwowo\/dsh-tavern/, 'the clone command is on screen verbatim')
+  assert.ok(text.includes('link:<你放 clone 的位置>'), 'and so is the link: reinstall')
+  assert.match(text, /T:recoverPlaceholder/, 'the placeholder is explained rather than left to be pasted blindly')
+  assert.ok(
+    text.includes('/Users/<user>/.dsh/profiles/web/node_modules/dsh-tavern'),
+    'the directory that was read is named, so a reader is not left guessing WHICH copy failed',
+  )
+
+  const buttons = findByClass(block, 'pm-upd-fix-cmd').map((row) => row.children.find((child) => child.type === 'button'))
+  assert.equal(buttons.length, 2, 'one copy button per command')
+  for (const button of buttons) button.props.onClick()
+  assert.deepEqual(
+    copied,
+    [archiveRecovery().commands.clone, archiveRecovery().commands.link],
+    'the clipboard gets exactly the two commands',
+  )
+
+  // A record with no repository (a registry install) still explains itself and
+  // offers no command: an invented clone URL would be worse than none.
+  const noRepo = upd.Recovery({
+    t,
+    copyText: () => undefined,
+    recovery: { applies: true, sourceKind: 'registry', reason: 'archiveFromRegistry', dir: null, commands: null },
+  })
+  const noRepoText = textOf(noRepo).join(' ')
+  assert.match(noRepoText, /T:recoverArchiveRegistry/)
+  assert.match(noRepoText, /T:recoverNoRepo/)
+  assert.equal(findByClass(noRepo, 'pm-upd-fix-cmd').length, 0, 'nothing to copy, so nothing is offered')
+
+  // And a record that does not apply renders NOTHING, so the block cannot appear
+  // on a healthy checkout.
+  assert.equal(upd.Recovery({ t, copyText: () => undefined, recovery: { applies: false, reason: 'linkNoRepo' } }), null)
+
+  // The wiring is what broke here, not the rendering: the panel must ASK for the
+  // block and hand it the host's record rather than re-deriving one.
+  const openPanel = (refs, plugin) =>
+    upd.UpdatePanel({
+      open: true,
+      refs,
+      remote: { phase: 'idle', data: null, error: null },
+      picked: '',
+      plan: { phase: 'idle', error: null, data: null },
+      run: { phase: 'idle', data: null, error: null },
+      canRemote: true,
+      setPicked: () => undefined,
+      loadRefs: () => undefined,
+      askRemote: () => undefined,
+      apply: () => undefined,
+      copyText: () => undefined,
+      t,
+      plugin,
+    })
+
+  const row = pluginRow({ name: 'archive-tool', sourceType: 'tarball-url', recovery: archiveRecovery() })
+  const ready = openPanel({ phase: 'ready', data: { ok: false, error: 'no .git/HEAD and no .git file', recovery: archiveRecovery() } }, row)
+  assert.equal(findByClass(ready, 'Recovery').length, 1, 'the panel asks for the recovery block')
+  assert.equal(findByClass(ready, 'Recovery')[0].props.recovery.reason, 'archiveFromSpec', 'and hands it the host record')
+
+  // The same record from the INVENTORY row is enough on its own: the panel opens
+  // before its refs request comes back, and the reason must not arrive late.
+  const early = openPanel({ phase: 'loading', data: null }, row)
+  assert.equal(findByClass(early, 'Recovery')[0].props.recovery.reason, 'archiveFromSpec', 'the reason is there before the refs request finishes')
+})

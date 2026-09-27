@@ -25,6 +25,8 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+import { checkoutRecovery, installDirIn, installDirOf } from './recovery.js'
+
 /** Directory under the harness home holding every profile. */
 const PROFILES_DIR = 'profiles'
 
@@ -441,6 +443,17 @@ export async function buildPluginInventory(fs, selfName) {
   for (const [name, spec] of Object.entries(dependencies)) {
     const installed = await readInstalledPackage(fs, read.profile.dir, name)
     const { sourceType, changeSignal } = classifySpec(spec)
+    // Why this row's version tools may have nothing to read, and what to run
+    // instead. Computed here rather than in the panel because the answer depends
+    // on the SPEC (an archive spec can never carry `.git`) and on where the
+    // install actually landed — both of which this loop already has, and neither
+    // of which is derivable from a commit that is null for two different reasons.
+    const recovery = checkoutRecovery({
+      spec,
+      name,
+      profileName: read.profile.name,
+      dir: installDirOf(installed.resolvedDir) ?? installDirIn(read.profile.dir, name),
+    })
     out.plugins.push({
       name,
       spec: str(spec),
@@ -451,6 +464,7 @@ export async function buildPluginInventory(fs, selfName) {
       declaresBundle: installed.declaresBundle,
       inBundles: out.declaredBundles.includes(name),
       self: name === selfName,
+      recovery,
     })
   }
 

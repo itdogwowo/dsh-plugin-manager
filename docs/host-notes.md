@@ -1013,6 +1013,88 @@ commit 沒有被刪掉——它仍然在摺疊區，因為它回答的是**另�
 > 我手上有三個 checkout，只讀了自己那一個就下結論。
 > 三個檔案讀完不用一分鐘——**省下的卻是我兩輪來回的時間**。
 
+### F39 ⛔⛔ `dsh plugin` 是 pnpm 的轉送器——**每一種 git spec 裝出來都沒有 `.git`**
+
+`[測]`（pnpm 12.4.1，macOS，`/tmp` 拋棄式目錄）
+
+`[使用者]` 在新機器上裝了本插件的姊妹插件，面板給了三行訊息：
+
+```
+換版訊號  integrity          ← 來源是 git/github/tarball spec
+integrity  no .git/HEAD and no .git file
+更新       遠端查詢失敗: this checkout records no origin remote
+```
+
+三行都對，但三行都沒回答「為什麼」。先查宿主，再查 pnpm。
+
+#### 1. `dsh plugin` 不做安裝，它轉送給 pnpm
+
+`@deepseek-ai/dsh/lib/plugin-Ddi42qoW.js` 自己的檔頭就寫了：
+
+> `thin pnpm forwarder: initialize the profile on first use, run pnpm <args...> in the profile directory, then reconcile the dsh.profile.bundles layer list`
+
+也就是說「spec 怎麼解析」的答案**不在 DSH 裡**，在 pnpm 裡。
+
+#### 2. pnpm 對 git spec 是**抓 tarball**，不是 clone
+
+實測（`package.json` 只放一條依賴，`pnpm install`）：
+
+| spec | pnpm 解析成 | 裝完目錄內容 |
+|---|---|---|
+| `github:jonschlinkert/is-number` | `.pnpm/is-number@https+++codeload.github.com+jonschlinkert+is-number+tar.gz+98e8ff1d…` | `index.js`／`LICENSE`／`package.json`／`README.md`，**沒有 `.git`** |
+| `github:jonschlinkert/is-number#7.0.0` | 同上（同一個 sha 的 tarball） | 同上 |
+| `https://github.com/…/archive/refs/heads/main.tar.gz` | 直接解壓 | 同上 |
+
+> **`#ref` 只釘住內容，不會帶來歷史。** 這是本插件安裝提示原本在推薦的路，
+> 而它對「選版本」這個用途是**死的**——連 `git` 執行檔在不在都無關。
+
+#### 3. 這條事實讓面板的三個功能一起失效（而且不是暫時的）
+
+`.git` 不存在 ⇒ `gitrefs.js` 的四個檔案全讀不到 ⇒
+
+| 面板動作 | 原始訊息 | 讀者的解讀 |
+|---|---|---|
+| 載入版本 | `no .git/HEAD and no .git file` | 「插件壞了？」 |
+| 查遠端 | `this checkout records no origin remote` | 「我的 remote 設錯了？」 |
+| 詳細資訊 | 沒有 `commit` 那一行 | 「還沒讀到吧」 |
+
+**三個都不是使用者能修的**，因為缺的東西不是設定，是**沒有那個目錄**。
+
+#### 4. 唯一可行的形狀：`link:`
+
+`link:` 指向真正的 working tree，那裡才有 `.git`。所以出路是
+
+```sh
+git clone <repoUrl> <你放 clone 的位置>
+dsh plugin --profile <n> add "link:<你放 clone 的位置>"
+```
+
+面板只提供**文字**，不代跑：本插件不 clone、不叫套件管理器（與
+`install-hints.mjs` 對「安裝 git」的規矩同一條）。
+
+#### 5. 修法（`recovery.js`）
+
+- 事實從 **spec** 推：`github:`／`git+`／`http(s)` tarball 一律「壓縮包」；
+  registry 只有名字、沒有 URL ⇒ **不生成 clone 指令**（生一個猜的比沒有更糟）；
+  `link:` 讀不到 `.git` ⇒ 報**它指的那個路徑**，因為壞的是路徑不是 pnpm。
+- `refs` 路由把這個紀錄一起回給面板，面板在按鈕旁邊說原因並給兩行可複製指令。
+- `github:owner/repo/archive/refs/heads/main.tar.gz` 這種 URL 要先切掉 `/archive/…`
+  再交給 `parseRemoteUrl`：那個函式把**最後一段**當 repo 名（對 remote 是對的），
+  否則會生出 `owner: owner/repo/archive/refs/heads`、`repo: main.tar.gz` 的 clone 指令。
+
+#### 順手修掉的兩個「只在別人機器上才過」的測試
+
+`[測]` 本機跑 `npm test` 有 12 支紅，全部與本功能無關，但**全部是同一類**：
+
+| 症狀 | 真因 |
+|---|---|
+| `profile.test.mjs` 5 支紅 | fixture 用 `resolve('X:', …)` 造「假絕對路徑」。`X:` 在 POSIX 是**普通相對段**，所以路徑是 `<cwd>/X:/harness/…`；而 `segmentsOf`＋`join` 又把開頭的 `/` 濾掉，兩邊各自錯在不同的地方，**只有在 cwd 剛好是 `/` 的容器裡才會一致** |
+| `update-routes.test.mjs` 1 支紅 | `probeDshLauncher` 走的是 `fs.stat`，不是 `subprocess.resolveExecutable`。測試只追蹤後者 ⇒ 這台機器上「找不到 dsh」而測試說「沒有 probe dsh」 |
+| `update-routes.test.mjs` 路徑比對 | macOS `tmpdir()` 是 `/var/folders/…`，本身是指向 `/private/var/…` 的 symlink，而 fs 替身回的是 realpath |
+
+> **教訓：fixture 的「假絕對路徑」必須真的絕對。** 內部自洽的錯誤會讓測試在作者的
+> 機器上永遠綠燈，而在每一台使用者的機器上紅燈——反過來也一樣。
+
 ### F33 ⛔⛔ `v0.0.0` 是**技術上正確、實質上是謊**——版本訊號取決於來源
 
 `[使用者]` 問：「dsh-plugin-manager，他是怎樣檢測版本的？」

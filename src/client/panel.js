@@ -36,7 +36,7 @@ export function createPanel(react, makeUpdatePanel) {
   const { useState, useEffect } = react
   // One call, three things out of it: the factory builds all of the update half
   // together, and calling it once per export would build it three times.
-  const { UpdatePanel, UpdateTrigger, useUpdate } = makeUpdatePanel(react)
+  const { UpdatePanel, UpdateTrigger, useUpdate, Recovery } = makeUpdatePanel(react)
 
   /** Shorten a hash for display without lying about which one it is. */
   function short(value) {
@@ -367,6 +367,15 @@ export function createPanel(react, makeUpdatePanel) {
               // overview, so it is here without pressing anything; the detection row
               // is only a fallback for a payload from an older host half.
               commitOf(plugin, detect) === null ? null : ['commit', h('span', { className: 'pm-mono' }, commitOf(plugin, detect))],
+              // An install whose spec can never yield a `.git` says so HERE, in
+              // the folded details, as well as in the update panel. Two reasons
+              // it belongs on the card: `commit` is simply absent for an archive
+              // install, and an absent row is indistinguishable from "not read
+              // yet"; and the update panel is only reachable through a button
+              // whose own two controls cannot work for this install.
+              recoveryFor(plugin) === null
+                ? null
+                : [t('recoverRowLabel'), h('span', { className: 'pm-break' }, t(recoveryFor(plugin)))],
               detect === null || detect.dirHash === null
                 ? null
                 : [
@@ -412,6 +421,32 @@ export function createPanel(react, makeUpdatePanel) {
     if (plugin.gitCommit !== null && plugin.gitCommit !== undefined) return String(plugin.gitCommit)
     if (detect === null || detect.commit === null || detect.commit === undefined) return null
     return String(detect.commit)
+  }
+
+  /**
+   * A one-line answer for an install that has no git checkout to read.
+   *
+   * ⚠️ The condition is `applies && no commit`, not `no commit` on its own. The
+   * host sets `recovery.applies` from the SPEC (`recovery.js`): an archive spec
+   * can never carry `.git`, so "no commit" is a property of the install rather
+   * than of this render. A checkout whose HEAD could not be read this second is a
+   * different report, and it must not be turned into this one — that is the same
+   * distinction the host draws, and the card must not blur it.
+   *
+   * @param {object} plugin - one inventory row.
+   * @returns {string|null} the copy key for the reason, or null.
+   */
+  function recoveryFor(plugin) {
+    const recovery = plugin.recovery
+    if (recovery === null || recovery === undefined || recovery.applies !== true) return null
+    if (plugin.gitCommit !== null && plugin.gitCommit !== undefined) return null
+    const reasons = {
+      archiveFromSpec: 'recoverArchiveSpec',
+      archiveFromRegistry: 'recoverArchiveRegistry',
+      archiveFromLocalFile: 'recoverArchiveFile',
+      linkNoRepo: 'recoverLinkNoRepo',
+    }
+    return reasons[recovery.reason] === undefined ? 'recoverArchiveRegistry' : reasons[recovery.reason]
   }
 
   /**
@@ -1137,7 +1172,17 @@ export function createPanel(react, makeUpdatePanel) {
   Panel.__PluginCard = PluginCard
   Panel.__InstallField = InstallField
   Panel.__CredentialsSection = CredentialsSection
-  Panel.__update = { UpdateTrigger, UpdatePanel, useUpdate }
+  // The recovery rule is exposed for the same reason as the two rules above: the
+  // condition is `applies && no commit`, the two halves come from different host
+  // routes, and a test that reads the rendered rows instead would have to guess
+  // at how a translated sentence is stored.
+  Panel.__recoveryKeyOf = recoveryFor
+  // `Recovery` is exported for the same reason as the card: `h(Recovery, …)` is a
+  // component descriptor, and the render test's stub deliberately never invokes
+  // components, so the block's two commands and its copy buttons only exist after
+  // React would have called it — and a test that walked the tree instead would
+  // assert on a descriptor rather than on what the user sees.
+  Panel.__update = { UpdateTrigger, UpdatePanel, useUpdate, Recovery }
 
   return Panel
   function Panel(props) {

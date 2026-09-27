@@ -82,6 +82,106 @@ export function createUpdatePanel(react) {
     return argv.map((part) => (/\s/.test(String(part)) ? `"${String(part)}"` : String(part))).join(' ')
   }
 
+  /**
+   * Why this install has no refs to read, and the way out of it.
+   *
+   * The failure this renders was the panel's worst kind: three true sentences
+   * that answered nothing. 「no .git/HEAD and no .git file」 is exactly what a
+   * reader would expect the button to produce if the plugin were broken, and it
+   * never said that the installed copy is an EXTRACTED ARCHIVE — pnpm turns every
+   * git-hosted spec (`github:owner/repo`, `github:owner/repo#ref`, a tarball URL)
+   * into a tarball, so there is no `.git` to read and no tool that could have
+   * read one. The host says which of the three reasons applies (`recovery.reason`)
+   * and, when the spec names a repository, the two commands that replace the
+   * archive with a `link:` checkout.
+   *
+   * ⚠️ The commands are OFFERED, never run: this plugin does not clone and does
+   * not invoke a package manager (`install-hints.mjs` states the same rule for
+   * tool installs). What the panel can do is make the two lines exact — a wrong
+   * `link:` path costs a profile reinstall — so they are copyable rather than
+   * paraphrased.
+   *
+   * The copy key is the same one the card's details row uses, so a reader who
+   * only opened the fold still gets the reason; the block adds what to run.
+   *
+   * @param {object} props - `{ recovery, copyText, t }`.
+   * @returns {object|null} the element, or null when there is nothing to report.
+   */
+  function Recovery(props) {
+    const t = props.t
+    const recovery = props.recovery
+    if (recovery === null || recovery === undefined || recovery.applies !== true) return null
+    if (typeof props.copyText !== 'function') return null
+    return h('div', { className: 'pm-upd-fix' }, recoveryTitle(t, recovery), recoveryBody(t, recovery, props.copyText))
+  }
+
+  /**
+   * The title line: that there is no `.git`, and WHICH of the four reasons it is.
+   *
+   * The reason is rendered from `recovery.reason` — a value the HOST computed
+   * from the spec — because the panel only ever sees the spec as a string, and
+   * "archive", "registry", "local file" and "a link that does not resolve" need
+   * four different sentences.
+   *
+   * @param {Function} t - the copy lookup.
+   * @param {object} recovery - the host's recovery record.
+   * @returns {object} the element.
+   */
+  function recoveryTitle(t, recovery) {
+    /** The reason keys, named literally so the dead-copy scan can find them. */
+    const reasons = {
+      archiveFromSpec: 'recoverArchiveSpec',
+      archiveFromRegistry: 'recoverArchiveRegistry',
+      archiveFromLocalFile: 'recoverArchiveFile',
+      linkNoRepo: 'recoverLinkNoRepo',
+    }
+    const reasonKey = reasons[recovery.reason] === undefined ? 'recoverArchiveRegistry' : reasons[recovery.reason]
+    return h('div', { className: 'pm-upd-fix-title' }, `${t('recoverTitle')} · ${t(reasonKey)}`)
+  }
+
+  /**
+   * The body: where it looked, and the two commands — or, when the spec names no
+   * repository, the honest statement that this plugin cannot build one.
+   *
+   * @param {Function} t - the copy lookup.
+   * @param {object} recovery - the host's recovery record.
+   * @param {Function} copyText - the panel's clipboard helper.
+   * @returns {object} the element.
+   */
+  function recoveryBody(t, recovery, copyText) {
+    const commands = recovery.commands
+    const dir = recovery.dir === null || recovery.dir === undefined ? null : String(recovery.dir)
+
+    /** One copyable command. */
+    const line = (key, command) =>
+      h(
+        'div',
+        { key, className: 'pm-upd-fix-cmd' },
+        h('code', { className: 'pm-mono pm-break' }, command),
+        h('button', { type: 'button', className: 'pm-btn pm-btn-sm', onClick: () => copyText(command) }, t('updateCopy')),
+      )
+
+    return h(
+      'div',
+      { className: 'pm-upd-fix-body' },
+      // WHICH directory was read matters: it is the profile's own `node_modules`,
+      // which is not where a reader who is editing a checkout would look.
+      dir === null ? null : h('div', { className: 'pm-upd-note pm-mono pm-break' }, dir),
+      commands === null || commands === undefined
+        ? h('div', { className: 'pm-upd-note' }, t('recoverNoRepo'))
+        : h(
+            'div',
+            { className: 'pm-upd-fix-body' },
+            h('div', { className: 'pm-upd-note' }, t('recoverCommands')),
+            line('recover-clone', String(commands.clone)),
+            line('recover-link', String(commands.link)),
+            // The placeholder is in the command on purpose; saying so is the
+            // difference between a command the user edits and one they paste.
+            h('div', { className: 'pm-upd-note' }, t('recoverPlaceholder')),
+          ),
+    )
+  }
+
   /** One pipeline step, as a chip-shaped line. */
   function stepLine(step, t) {
     const labels = {
@@ -421,6 +521,23 @@ export function createUpdatePanel(react) {
         ? h('div', { className: 'pm-upd-note' }, t('updateNoRemote'))
         : null,
 
+      // The install has no git checkout at all, so `載入版本`, `查遠端` and the
+      // commit row cannot answer — not now and not after a retry, because the
+      // spec never produced a `.git` in the first place. The reason comes from
+      // the host (it depends on the SPEC, which the panel only sees as a string),
+      // and with it come the two commands that replace the archive with a
+      // checkout. Rendered before the plan block: those buttons are what the
+      // reader is looking at when it appears.
+      h(Recovery, {
+        t,
+        copyText,
+        // `refs.data` can be undefined while the phase already reads `ready`
+        // (nothing guarantees the two arrive together), and an undefined payload
+        // must not take the whole panel down: the inventory row, which the panel
+        // already has, carries the same record from the same host build.
+        recovery: refs.phase === 'ready' && refs.data !== null && refs.data !== undefined ? refs.data.recovery : plugin === undefined || plugin === null ? null : plugin.recovery,
+      }),
+
       plan.phase === 'loading' ? h('div', { className: 'pm-upd-note' }, t('updateChecking')) : null,
       plan.phase === 'error' ? h('div', { className: 'pm-upd-note pm-upd-note-bad' }, String(plan.error)) : null,
 
@@ -566,6 +683,6 @@ export function createUpdatePanel(react) {
 
   UpdatePanel.__groupRefs = groupRefs
 
-  return { UpdatePanel, UpdateTrigger, groupRefs, useUpdate }
+  return { UpdatePanel, UpdateTrigger, groupRefs, useUpdate, Recovery }
 }
 

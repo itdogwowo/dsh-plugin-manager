@@ -20,7 +20,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { join, resolve } from 'node:path'
+import { join, posix, resolve } from 'node:path'
 
 import {
   activeProfile,
@@ -32,14 +32,45 @@ import {
   setHomedirReader,
 } from '../src/host/profile.js'
 
-/** Build fake absolute path segments — absolute on every platform. */
+/**
+ * Build a fake path that is ABSOLUTE on every platform.
+ *
+ * ⚠️ `resolve('X:', …)` is not absolute on POSIX. `X:` is a Windows drive there
+ * and a plain relative segment here, so every fixture path came out as
+ * `<cwd>/X:/harness/…` — a path rooted at whatever directory the suite happened to
+ * run in. `segmentsOf` + `join` then rebuilt the same path WITHOUT the leading
+ * slash, so the fixture's table key and the path the code under test builds were
+ * two different wrong strings that agreed only when the cwd was `/` (the container
+ * this suite was written in). Anchoring at `/` makes both sides absolute, and
+ * identical, on any machine.
+ *
+ * @param {...string} segments - path segments below the fake root.
+ * @returns {string} an absolute path under the fake root.
+ */
+const FAKE_ROOT = '/X:/harness/.dsh'
 function p(...segments) {
-  return resolve('X:', 'harness', '.dsh', ...segments)
+  return [FAKE_ROOT, ...segments].join('/')
 }
 
-/** Split an absolute path into segments for `join`, on any separator. */
+/** Split a path into segments, dropping empties. */
 function segmentsOf(path) {
   return path.split(/[\\/]/).filter((part) => part.length > 0)
+}
+
+/**
+ * Rebuild a path from a slot and further segments, KEEPING it absolute.
+ *
+ * The separator style follows the slot, so a POSIX path stays POSIX (and keeps its
+ * leading `/` through `posix.join`), while a drive-shaped one is joined by
+ * `node:path` on the platform that has drives.
+ *
+ * @param {string} slot - the path the result must be comparable to.
+ * @param {...string} parts - further segments.
+ * @returns {string} the joined path.
+ */
+function keyed(slot, ...parts) {
+  const segments = segmentsOf(slot).concat(parts)
+  return slot.startsWith('/') ? posix.join('/', ...segments) : join(...segments)
 }
 
 const HOME = p()
@@ -80,7 +111,7 @@ function withFakeOsHome(home, body) {
  */
 function fakeFs(entries, base) {
   const files = new Map()
-  for (const [parts, text] of entries) files.set(join(...parts), text)
+  for (const [path, text] of entries) files.set(path, text)
 
   return {
     async resolve(path) {
@@ -164,7 +195,7 @@ test('activeProfile: DSH_PROFILE wins over argv, and web is the alias fallback',
 test('candidates: the OS home comes second, and the default name is retried', () => {
   // The profile name and the harness home are both inferred, so both get a
   // second chance: `renamed` then `web`, and DSH_HOME then the OS home.
-  const osHome = resolve('X:', 'other')
+  const osHome = p('other')
   const fromOsHome = join(osHome, '.dsh', 'profiles', 'web')
 
   return withFakeOsHome(osHome, () =>
@@ -192,35 +223,35 @@ test('readManifest: the fs base directory IS the profile, with NO environment at
     dependencies: { alpha: '1.0.0' },
     dsh: { profile: { bundles: [] } },
   })
-  const fs = fakeFs([[segmentsOf(PROFILE).concat('package.json'), manifest]], PROFILE)
+  const fs = fakeFs([[keyed(PROFILE, 'package.json'), manifest]], PROFILE)
 
-  const result = await withFakeOsHome(resolve('X:', 'other'), () => withEnv(NO_ENV, () => readManifest(fs)))
+  const result = await withFakeOsHome(p('other'), () => withEnv(NO_ENV, () => readManifest(fs)))
 
   assert.equal(result.ok, true, 'the fs base directory must be enough on its own')
   assert.equal(result.profile.source, 'fs-base')
   assert.equal(result.profile.name, 'web')
-  assert.equal(result.manifestPath, join(PROFILE, 'package.json'))
+  assert.equal(result.manifestPath, keyed(PROFILE, 'package.json'))
   assert.match(result.attempts[0].detail, /fs base directory is the profile/)
 })
 
 test('readManifest: a base directory that is not a profile falls through to the environment', async () => {
-  const checkout = resolve('X:', 'checkout')
+  const checkout = p('checkout')
   const fs = fakeFs(
     [
-      [segmentsOf(checkout).concat('package.json'), JSON.stringify({ name: 'not-a-profile' })],
+      [keyed(checkout, 'package.json'), JSON.stringify({ name: 'not-a-profile' })],
       [
-        segmentsOf(PROFILE).concat('package.json'),
+        keyed(PROFILE, 'package.json'),
         JSON.stringify({ name: 'dsh-profile-web', dsh: { profile: { bundles: [] } } }),
       ],
     ],
     checkout,
   )
 
-  const result = await withFakeOsHome(resolve('X:', 'other'), () => withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'web' }, () => readManifest(fs)))
+  const result = await withFakeOsHome(p('other'), () => withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'web' }, () => readManifest(fs)))
 
   assert.equal(result.ok, true)
   assert.equal(result.profile.source, 'DSH_PROFILE')
-  assert.equal(result.manifestPath, join(PROFILE, 'package.json'))
+  assert.equal(result.manifestPath, keyed(PROFILE, 'package.json'))
   // The rejected base-directory attempt is still on the record.
   assert.match(result.attempts[0].detail, /carries no dsh/)
 })
@@ -228,7 +259,7 @@ test('readManifest: a base directory that is not a profile falls through to the 
 test('readManifest: an unreadable profile reports the reason AND every path tried', async () => {
   const fs = fakeFs([])
 
-  const result = await withFakeOsHome(resolve('X:', 'other'), () => withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'web' }, () => readManifest(fs)))
+  const result = await withFakeOsHome(p('other'), () => withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'web' }, () => readManifest(fs)))
 
   assert.equal(result.ok, false)
   assert.match(result.reason, /no candidate profile manifest could be read/)
@@ -237,7 +268,7 @@ test('readManifest: an unreadable profile reports the reason AND every path trie
   // the manifest was unreadable, or resolving itself failed.
   const first = result.attempts[0]
   assert.ok(
-    first.path === 'fs.resolve(".")' || first.path === join(PROFILE, 'package.json'),
+    first.path === 'fs.resolve(".")' || first.path === keyed(PROFILE, 'package.json'),
     `unexpected first attempt: ${first.path}`,
   )
   assert.ok(result.attempts.length >= 2, 'the fallback candidates must also be recorded')
@@ -245,16 +276,16 @@ test('readManifest: an unreadable profile reports the reason AND every path trie
 })
 
 test('readManifest: a missing fs is a distinct reason, never a throw', async () => {
-  const result = await withFakeOsHome(resolve('X:', 'other'), () => withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'web' }, () => readManifest(undefined)))
+  const result = await withFakeOsHome(p('other'), () => withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'web' }, () => readManifest(undefined)))
 
   assert.equal(result.ok, false)
   assert.match(result.reason, /fs service is not available/)
 })
 
 test('readManifest: invalid JSON is reported per attempt, never thrown', async () => {
-  const fs = fakeFs([[segmentsOf(PROFILE).concat('package.json'), '{ not json']])
+  const fs = fakeFs([[keyed(PROFILE, 'package.json'), '{ not json']])
 
-  const result = await withFakeOsHome(resolve('X:', 'other'), () => withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'web' }, () => readManifest(fs)))
+  const result = await withFakeOsHome(p('other'), () => withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'web' }, () => readManifest(fs)))
 
   assert.equal(result.ok, false)
   assert.ok(result.attempts.length >= 1)
@@ -263,14 +294,14 @@ test('readManifest: invalid JSON is reported per attempt, never thrown', async (
 
 test('readManifest: a manifest with no dsh is rejected and the next candidate tried', async () => {
   const fs = fakeFs([
-    [segmentsOf(p('profiles', 'renamed')).concat('package.json'), JSON.stringify({ name: 'not-a-profile' })],
+    [keyed(p('profiles', 'renamed'), 'package.json'), JSON.stringify({ name: 'not-a-profile' })],
     [
-      segmentsOf(PROFILE).concat('package.json'),
+      keyed(PROFILE, 'package.json'),
       JSON.stringify({ name: 'dsh-profile-web', dsh: { profile: { bundles: [] } } }),
     ],
   ])
 
-  const result = await withFakeOsHome(resolve('X:', 'other'), () => withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'renamed' }, () => readManifest(fs)))
+  const result = await withFakeOsHome(p('other'), () => withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'renamed' }, () => readManifest(fs)))
 
   assert.equal(result.ok, true)
   assert.equal(result.profile.name, 'web', 'the default name is the second chance')
@@ -282,7 +313,7 @@ test('readManifest: a manifest with no dsh is rejected and the next candidate tr
 test('inventory: only dependencies are third-party; shipped bundles are excluded', async () => {
   const fs = fakeFs([
     [
-      segmentsOf(PROFILE).concat('package.json'),
+      keyed(PROFILE, 'package.json'),
       JSON.stringify({
         name: 'dsh-profile-web',
         dependencies: {
@@ -294,7 +325,7 @@ test('inventory: only dependencies are third-party; shipped bundles are excluded
       }),
     ],
     [
-      segmentsOf(PROFILE).concat('node_modules', 'dsh-plugin-manager', 'package.json'),
+      keyed(PROFILE, 'node_modules', 'dsh-plugin-manager', 'package.json'),
       JSON.stringify({
         name: 'dsh-plugin-manager',
         version: '0.0.0',
@@ -302,14 +333,14 @@ test('inventory: only dependencies are third-party; shipped bundles are excluded
       }),
     ],
     [
-      segmentsOf(PROFILE).concat('node_modules', 'dsh-tavern', 'package.json'),
+      keyed(PROFILE, 'node_modules', 'dsh-tavern', 'package.json'),
       JSON.stringify({ name: 'dsh-tavern', version: '1.2.3', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
     ],
     // @liustack/modsearch is intentionally absent: a dependency whose install
     // directory is gone must still be listed, with a null version.
   ])
 
-  const inventory = await withFakeOsHome(resolve('X:', 'other'), () =>
+  const inventory = await withFakeOsHome(p('other'), () =>
     withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'web' }, () =>
       buildPluginInventory(fs, 'dsh-plugin-manager'),
     ),
@@ -352,7 +383,7 @@ test('inventory: only dependencies are third-party; shipped bundles are excluded
 })
 
 test('inventory: an unavailable manifest still yields a JSON-safe shape with a reason', async () => {
-  const inventory = await withFakeOsHome(resolve('X:', 'other'), () =>
+  const inventory = await withFakeOsHome(p('other'), () =>
     withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'web' }, () =>
       buildPluginInventory(undefined, 'dsh-plugin-manager'),
     ),
@@ -368,12 +399,12 @@ test('inventory: an unavailable manifest still yields a JSON-safe shape with a r
 test('inventory: a manifest without dependencies yields an empty list, not an error', async () => {
   const fs = fakeFs([
     [
-      segmentsOf(PROFILE).concat('package.json'),
+      keyed(PROFILE, 'package.json'),
       JSON.stringify({ name: 'dsh-profile-web', private: true, dsh: { profile: { bundles: [] } } }),
     ],
   ])
 
-  const inventory = await withFakeOsHome(resolve('X:', 'other'), () =>
+  const inventory = await withFakeOsHome(p('other'), () =>
     withEnv({ ...NO_ENV, DSH_HOME: HOME, DSH_PROFILE: 'web' }, () =>
       buildPluginInventory(fs, 'dsh-plugin-manager'),
     ),

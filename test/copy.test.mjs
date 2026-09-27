@@ -43,6 +43,13 @@ function usedKeys(source) {
   for (const match of source.matchAll(/:\s*'(step[A-Z]\w+|status[A-Z]\w+|updateGroup[A-Z]\w+)'/g)) {
     keys.add(match[1])
   }
+  // The recovery block's four reasons are the third instance of it: `recovery.js`
+  // answers with `archiveFromSpec` / `archiveFromRegistry` / `archiveFromLocalFile`
+  // / `linkNoRepo`, and the renderer maps each to a `recover…` sentence. Without
+  // this group the four keys read as dead copy while they are on screen.
+  for (const match of source.matchAll(/:\s*'(recover[A-Z]\w+)'/g)) {
+    keys.add(match[1])
+  }
   return [...keys].sort()
 }
 

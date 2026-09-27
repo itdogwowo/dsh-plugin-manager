@@ -32,6 +32,9 @@ import { storeFilePath } from '../src/host/gitcredentials.js'
 const routesModule = await import('../src/host/routes.js')
 const ENDPOINTS = JSON.parse(readFileSync(new URL('../src/endpoints.json', import.meta.url), 'utf8'))
 
+/** The suffix `probeDshLauncher` looks for when it stats a launcher candidate. */
+const LAUNCHER_SUFFIX = join('lib', 'bin.js')
+
 /** The commit the synthetic checkout sits on. */
 const HEAD_SHA = 'a'.repeat(40)
 
@@ -137,11 +140,16 @@ function fsWithSourcetree(seen) {
  * @returns {Promise<void>} resolves once the tree is removed.
  */
 async function withDeployment(run) {
-  const home = mkdtempSync(join(tmpdir(), 'dsh-pm-dep-'))
+  // `realpathSync(tmpdir())`: on macOS `tmpdir()` is `/var/folders/…`, itself a
+  // symlink to `/private/var/folders/…`, while the `fs` double resolves to the
+  // REAL path — so every expected path would differ from every produced one by
+  // that prefix and the test would fail for a reason unrelated to the product.
+  const home = mkdtempSync(join(realpathSync(tmpdir()), 'dsh-pm-dep-'))
   const profileDir = join(home, 'profiles', 'web')
   const checkout = join(home, 'plugins-src', 'dsh-power')
   const previousProfile = process.env.DSH_PROFILE
   const previousHome = process.env.DSH_HOME
+  const previousBin = process.env.DSH_BIN
   try {
     put(profileDir, 'package.json', `${JSON.stringify({
       name: 'dsh-profile-web',
@@ -152,6 +160,17 @@ async function withDeployment(run) {
       },
       dsh: { profile: { bundles: ['dsh-power'] } },
     }, null, 2)}\n`)
+
+    // ⚠️ The launcher is located by stat'ing candidate paths (`host.js`), and its
+    // candidate list derives from HOW THIS PROCESS WAS STARTED (`process.argv[1]`
+    // walking up to a `@deepseek-ai/dsh/lib/bin.js` layout). Under `node --test`
+    // that entry is the test RUNNER, so on a perfectly healthy machine the probe
+    // finds nothing and the plan reports the launcher unavailable — a test that
+    // fails for a reason unrelated to the product. `DSH_BIN` is the host's own
+    // documented override, so the deployment simply states the answer:
+    // `lib/bin.js`, the one shape `probeDshLauncher` stats.
+    put(home, 'launcher/lib/bin.js', '// launcher\n')
+    process.env.DSH_BIN = join(home, 'launcher', 'lib', 'bin.js')
 
     put(profileDir, 'node_modules/plain-lib/package.json', JSON.stringify({ name: 'plain-lib', version: '1.0.0', main: 'index.js' }))
     put(profileDir, 'node_modules/plain-lib/index.js', 'export default 1\n')
@@ -186,7 +205,7 @@ async function withDeployment(run) {
     process.env.DSH_PROFILE = 'web'
     await run({ home, profileDir, checkout, linked })
   } finally {
-    for (const [key, value] of [['DSH_PROFILE', previousProfile], ['DSH_HOME', previousHome]]) {
+    for (const [key, value] of [['DSH_PROFILE', previousProfile], ['DSH_HOME', previousHome], ['DSH_BIN', previousBin]]) {
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
     }
@@ -288,7 +307,24 @@ function mountRealRoutes(options = {}) {
       return resolve(command)
     },
   }
-  const services = { fs: options.fs ?? realFs(), subprocess: tracked }
+  // ⚠️ `probeDshLauncher` does not use this seam at all: it locates the launcher by
+  // `fs.stat` over candidate paths (`host.js`), so a test that tracked only
+  // `resolveExecutable` would report "no dsh probe" on a machine where dsh works —
+  // and the assertion that a plan probes the launcher (the bug that made every
+  // local checkout update refuse) would fail for the wrong reason. Both probe
+  // entry points are tracked, and they are told apart by the name recorded.
+  const baseFs = options.fs ?? realFs()
+  const services = {
+    fs: {
+      ...baseFs,
+      async stat(handle) {
+        const path = String(handle?.displayPath ?? '')
+        if (path.endsWith(LAUNCHER_SUFFIX)) probes.push('dsh (fs)')
+        return baseFs.stat(handle)
+      },
+    },
+    subprocess: tracked,
+  }
   const ctx = {
     effect(callback, label) {
       callback()
