@@ -465,6 +465,47 @@ for (const path of privacyFiles()) {
   }
 }
 
+/**
+ * Credential shapes that must never reach a committed file.
+ *
+ * ⚠️ Why this scan exists next to the path scan: an identity leak is bad, but a
+ * SECRET is worse in a way that cannot be undone — rewriting public history does
+ * not remove it (`dsh-Note/notes/privacy.md` says the same about `force push`;
+ * the only real fix is deleting the repository). The plugin now handles
+ * credentials on purpose, so "we were careful" is not a control; this is.
+ */
+const SECRET_SHAPES = [
+  { pattern: /\bghp_[A-Za-z0-9]{36}\b/, why: 'a GitHub personal access token' },
+  { pattern: /\bgithub_pat_[A-Za-z0-9_]{22,}\b/, why: 'a GitHub fine-grained token' },
+  { pattern: /\bgh[osru]_[A-Za-z0-9]{36}\b/, why: 'a GitHub OAuth or app token' },
+]
+
+/**
+ * The synthetic tokens the tests use.
+ *
+ * Listed one by one, never as a shape: an allow-list of SHAPES is how a
+ * placeholder rule gets defeated, and every literal here is one a reader can see
+ * is fake. A real token will not match any of them.
+ */
+const SYNTHETIC_TOKENS = new Set([
+  'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+  'ghp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz',
+  'ghp_thisMustNeverBeRendered1234567890',
+])
+
+for (const path of privacyFiles()) {
+  const rel = relative(ROOT, path)
+  const lines = read(path).split('\n')
+  for (let index = 0; index < lines.length; index += 1) {
+    for (const shape of SECRET_SHAPES) {
+      const match = shape.pattern.exec(lines[index])
+      if (match === null || SYNTHETIC_TOKENS.has(match[0])) continue
+      fail('PRIVACY', rel, index + 1, `${shape.why} appears in this file — remove it before it is committed`)
+    }
+  }
+}
+note(`credential shapes: ${SECRET_SHAPES.length} pattern(s) over ${privacyFiles().length} file(s)`)
+
 /** Local denylist: gitignored, one term per line, `#` starts a comment. */
 const DENYLIST = join(ROOT, '.privacy-denylist.txt')
 if (existsSync(DENYLIST)) {
